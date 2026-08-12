@@ -1,14 +1,43 @@
 """Flask application and HTTP routes."""
 
-from flask import Flask, jsonify, request
+from pathlib import Path
+
+from flask import Flask, jsonify, request, send_file
 from flasgger import Swagger
 from werkzeug.utils import secure_filename
 
+from flask_migrate import Migrate
+
+from .config import DATABASE_URL
+from .gcode_storage import (
+    StorageError,
+    create_gcode_folder,
+    delete_gcode_file,
+    get_gcode_file,
+    list_gcode_files,
+    list_gcode_folders,
+    save_gcode_file,
+)
+from .models import db
 from .protocols import control_printer, start_printer_print, upload_printer_file
+from .queue_manager import (
+    delete_queue_item,
+    dispatch_queue_item,
+    get_print_queue,
+    get_printers_queue_status,
+    schedule_print_queue,
+    update_queue_item,
+)
 from .services import get_printer_files, get_printer_status, scan_network
 
 
 app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db.init_app(app)
+migrate = Migrate(app, db)
+
 
 
 @app.after_request
@@ -16,7 +45,7 @@ def add_cors_headers(response):
     """Allow the local Vite frontend to call the development API."""
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
 
@@ -142,6 +171,196 @@ def printer_files(ip: str):
         }), 404
 
     return jsonify({"ip": ip, "files": files, "supported": True})
+
+
+def _storage_error_response(error: StorageError):
+    return jsonify({"error": error.message}), error.status_code
+
+
+@app.post("/gcode/folders")
+def create_gcode_folder_route():
+    """Create a local G-code folder with size subfolders.
+    ---
+    tags:
+      - Local G-code Storage
+    consumes:
+      - application/json
+    parameters:
+      - in: body
+        name: folder
+        required: true
+        schema:
+          type: object
+          required:
+            - name
+          properties:
+            name:
+              type: string
+              example: customer-job-001
+    responses:
+      201:
+        description: Folder created with 1ft through 6ft subfolders
+      400:
+        description: Invalid folder name
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        folder = create_gcode_folder(payload.get("name"))
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify(folder), 201
+
+
+@app.get("/gcode/folders")
+def list_gcode_folders_route():
+    """List local G-code folders.
+    ---
+    tags:
+      - Local G-code Storage
+    responses:
+      200:
+        description: Local storage folders
+    """
+    return jsonify({"folders": list_gcode_folders()})
+
+
+@app.post("/gcode/files")
+def upload_local_gcode_file_route():
+    """Store a G-code file in local storage and save its path in PostgreSQL.
+    ---
+    tags:
+      - Local G-code Storage
+    consumes:
+      - multipart/form-data
+    parameters:
+      - name: folder
+        in: formData
+        required: true
+        type: string
+      - name: size
+        in: formData
+        required: true
+        type: string
+        enum: [1ft, 1.5ft, 2ft, 2.5ft, 3ft, 3.5ft, 4ft, 4.5ft, 5ft, 5.5ft, 6ft]
+      - name: file
+        in: formData
+        required: true
+        type: file
+    responses:
+      201:
+        description: G-code file saved locally
+      400:
+        description: Missing or invalid input
+      503:
+        description: PostgreSQL is unavailable
+    """
+    try:
+        file_record = save_gcode_file(
+            request.files.get("file"),
+            request.form.get("folder"),
+            request.form.get("size"),
+        )
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify(file_record), 201
+
+
+@app.get("/gcode/files")
+def list_local_gcode_files_route():
+    """List local G-code files stored in PostgreSQL.
+    ---
+    tags:
+      - Local G-code Storage
+    parameters:
+      - name: folder
+        in: query
+        required: false
+        type: string
+      - name: size
+        in: query
+        required: false
+        type: string
+    responses:
+      200:
+        description: Stored G-code files
+      503:
+        description: PostgreSQL is unavailable
+    """
+    try:
+        files = list_gcode_files(
+            request.args.get("folder"),
+            request.args.get("size"),
+        )
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify({"files": files})
+
+
+@app.get("/gcode/files/<int:file_id>")
+def view_local_gcode_file_route(file_id: int):
+    """Download or view a local G-code file by database id.
+    ---
+    tags:
+      - Local G-code Storage
+    parameters:
+      - name: file_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: G-code file content
+      404:
+        description: File record or stored file not found
+      503:
+        description: PostgreSQL is unavailable
+    """
+    try:
+        file_record = get_gcode_file(file_id)
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    if file_record is None:
+        return jsonify({"error": "G-code file not found"}), 404
+
+    path = Path(file_record["path"])
+    if not path.exists():
+        return jsonify({"error": "G-code file is missing from local storage"}), 404
+
+    return send_file(path, mimetype="text/plain", as_attachment=False)
+
+
+@app.delete("/gcode/files/<int:file_id>")
+def delete_local_gcode_file_route(file_id: int):
+    """Delete a local G-code file and its PostgreSQL record.
+    ---
+    tags:
+      - Local G-code Storage
+    parameters:
+      - name: file_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: File deleted
+      404:
+        description: File record not found
+      503:
+        description: PostgreSQL is unavailable
+    """
+    try:
+        deleted = delete_gcode_file(file_id)
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    if deleted is None:
+        return jsonify({"error": "G-code file not found"}), 404
+
+    return jsonify({"deleted": deleted})
 
 
 @app.post("/printer/<ip>/files")
@@ -310,3 +529,207 @@ def stop_printer(ip: str):
         description: Printer is unreachable or unsupported
     """
     return _control_printer(ip, "stop")
+
+
+@app.post("/queue/schedule")
+def schedule_queue_route():
+    """Schedule selected G-code files into the print queue with priority and auto-assign printers.
+    ---
+    tags:
+      - Print Queue
+    consumes:
+      - application/json
+    parameters:
+      - in: body
+        name: payload
+        required: true
+        schema:
+          type: object
+          required:
+            - jobs
+          properties:
+            jobs:
+              type: array
+              items:
+                type: object
+                required:
+                  - gcode_file_id
+                  - priority
+                properties:
+                  gcode_file_id:
+                    type: integer
+                    example: 1
+                  priority:
+                    type: integer
+                    example: 1
+    responses:
+      201:
+        description: Queue items created and assigned
+      400:
+        description: Invalid job request payload
+      503:
+        description: PostgreSQL is unavailable
+    """
+    payload = request.get_json(silent=True) or {}
+    jobs = payload.get("jobs")
+    try:
+        items = schedule_print_queue(jobs)
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify({"scheduled": items}), 201
+
+
+@app.get("/queue")
+def get_queue_route():
+    """Get the active print queue.
+    ---
+    tags:
+      - Print Queue
+    parameters:
+      - name: status
+        in: query
+        required: false
+        type: string
+      - name: printer_ip
+        in: query
+        required: false
+        type: string
+    responses:
+      200:
+        description: Active print queue items sorted by priority
+      503:
+        description: PostgreSQL is unavailable
+    """
+    try:
+        queue = get_print_queue(
+            status=request.args.get("status"),
+            printer_ip=request.args.get("printer_ip"),
+        )
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify({"queue": queue})
+
+
+@app.get("/queue/printers")
+def get_printers_queue_status_route():
+    """Get printers with their availability, remaining print time, and assigned upcoming jobs.
+    ---
+    tags:
+      - Print Queue
+    responses:
+      200:
+        description: List of printers with availability and assigned queue jobs
+    """
+    try:
+        printers = get_printers_queue_status()
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify({"printers": printers})
+
+
+@app.put("/queue/items/<int:item_id>")
+def update_queue_item_route(item_id: int):
+    """Update priority, status, or printer assignment of a queue item.
+    ---
+    tags:
+      - Print Queue
+    parameters:
+      - name: item_id
+        in: path
+        required: true
+        type: integer
+      - in: body
+        name: payload
+        required: true
+        schema:
+          type: object
+          properties:
+            priority:
+              type: integer
+            status:
+              type: string
+              enum: [queued, assigned, printing, completed, failed, cancelled]
+            printer_ip:
+              type: string
+    responses:
+      200:
+        description: Queue item updated
+      404:
+        description: Queue item not found
+      400:
+        description: Invalid parameter or state transition
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        updated = update_queue_item(
+            item_id,
+            priority=payload.get("priority"),
+            status=payload.get("status"),
+            printer_ip=payload.get("printer_ip"),
+        )
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    if updated is None:
+        return jsonify({"error": "Print queue item not found"}), 404
+
+    return jsonify({"queue_item": updated})
+
+
+@app.post("/queue/items/<int:item_id>/dispatch")
+def dispatch_queue_item_route(item_id: int):
+    """Dispatch an assigned queue item (uploads G-code to printer and starts print).
+    ---
+    tags:
+      - Print Queue
+    parameters:
+      - name: item_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: Job dispatched to printer and marked as printing
+      400:
+        description: Unassigned printer or printer unreachable
+      404:
+        description: Queue item not found
+    """
+    try:
+        dispatched = dispatch_queue_item(item_id)
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    return jsonify({"dispatched": dispatched}), 200
+
+
+@app.delete("/queue/items/<int:item_id>")
+def delete_queue_item_route(item_id: int):
+    """Remove an item from the print queue.
+    ---
+    tags:
+      - Print Queue
+    parameters:
+      - name: item_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: Item deleted from queue
+      404:
+        description: Item not found
+    """
+    try:
+        deleted = delete_queue_item(item_id)
+    except StorageError as error:
+        return _storage_error_response(error)
+
+    if deleted is None:
+        return jsonify({"error": "Print queue item not found"}), 404
+
+    return jsonify({"deleted": deleted})
+

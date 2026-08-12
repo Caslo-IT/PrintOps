@@ -1,4 +1,9 @@
 flask
 flasgger
+psycopg2-binary
 requests
 websockets
+flask-sqlalchemy
+flask-migrate
+python-dotenv
+

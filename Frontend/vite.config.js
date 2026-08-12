@@ -9,6 +9,8 @@ export default defineConfig({
     proxy: {
       '/printers': 'http://127.0.0.1:5000',
       '/printer': 'http://127.0.0.1:5000',
+      '/gcode': 'http://127.0.0.1:5000',
+      '/queue': 'http://127.0.0.1:5000',
     },
   },
 })

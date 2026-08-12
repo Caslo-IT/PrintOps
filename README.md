@@ -39,16 +39,45 @@ Start a file already stored on the printer with
 Print control is available through `POST /printer/<ip>/pause`,
 `POST /printer/<ip>/resume`, and `POST /printer/<ip>/stop`.
 
+Local G-code library storage uses `Backend/data storage` by default and stores
+file locations in the local PostgreSQL database named `printops` via SQLAlchemy ORM.
+Configure the database connection in `Backend/.env`:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/printops
+```
+
+Apply database migrations:
+
+```bash
+cd Backend
+flask db upgrade
+```
+
+Create a local storage folder with `POST /gcode/folders` and JSON such as
+`{"name": "customer-job-001"}`. The backend creates these subfolders inside it:
+`1ft`, `1.5ft`, `2ft`, `2.5ft`, `3ft`, `3.5ft`, `4ft`, `4.5ft`, `5ft`,
+`5.5ft`, and `6ft`.
+
+Store a G-code file with `POST /gcode/files` using multipart fields named
+`folder`, `size`, and `file`. View stored file metadata with `GET /gcode/files`,
+download/view a file with `GET /gcode/files/<id>`, and delete a stored file with
+`DELETE /gcode/files/<id>`.
+
 ## Backend structure
 
 ```text
 Backend/
 ├── main.py           # Flask application entry point
 ├── wsgi.py           # Flask CLI discovery entry point
+├── migrations/       # Flask-Migrate / Alembic migration scripts
 └── app/
-    ├── api.py        # FastAPI app and routes
+    ├── api.py        # Flask app and routes
     ├── config.py     # Environment-based configuration
+    ├── gcode_storage.py # Storage management backed by SQLAlchemy ORM
+    ├── models.py     # SQLAlchemy ORM database models
     ├── network.py    # Local network and IP discovery
     ├── protocols.py  # Creality WebSocket and Moonraker clients
     └── services.py   # Printer scanning and status fallback logic
 ```
+
