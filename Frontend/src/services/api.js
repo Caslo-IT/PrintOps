@@ -102,4 +102,13 @@ export const api = {
     request(`/queue/items/${id}`, {
       method: 'DELETE',
     }),
+
+  // Activity Logs
+  getActivityLogs: (limit = 50, printerIp = null) => {
+    const params = new URLSearchParams()
+    if (limit) params.set('limit', limit)
+    if (printerIp) params.set('printer_ip', printerIp)
+    const queryString = params.toString()
+    return request(`/activity${queryString ? `?${queryString}` : ''}`)
+  },
 }

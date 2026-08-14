@@ -171,3 +171,31 @@ class PrintQueueItem(db.Model):
             "gcode_file": file_info,
         }
 
+
+class ActivityLog(db.Model):
+    """ORM model representing an activity log entry for printers and printing."""
+
+    __tablename__ = "activity_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    printer_ip = db.Column(db.Text, nullable=True)
+    event_type = db.Column(db.String(50), nullable=False, default="info")
+    message = db.Column(db.Text, nullable=False)
+    details = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    def to_dict(self):
+        """Convert ORM model instance to dictionary representation."""
+        return {
+            "id": self.id,
+            "printer_ip": self.printer_ip,
+            "event_type": self.event_type,
+            "message": self.message,
+            "details": self.details,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+

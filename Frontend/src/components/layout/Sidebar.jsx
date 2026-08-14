@@ -49,7 +49,12 @@ export function Sidebar({ printerCount, queueCount, storageCount, activeView, on
             active={activeView === 'storage'}
             onClick={() => onNavigate('storage')}
           />
-          <NavItem icon={<Activity size={17} />} label="Activity log" />
+          <NavItem
+            icon={<Activity size={17} />}
+            label="Activity log"
+            active={activeView === 'activity'}
+            onClick={() => onNavigate('activity')}
+          />
           <div className="mb-3 mt-10 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-400">Manage</div>
           <NavItem icon={<Settings size={17} />} label="Settings" />
           <NavItem icon={<CircleHelp size={17} />} label="Help center" />

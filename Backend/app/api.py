@@ -28,6 +28,8 @@ from .queue_manager import (
     schedule_print_queue,
     update_queue_item,
 )
+from .activity_logger import log_activity
+from .models import ActivityLog
 from .services import get_printer_files, get_printer_status, scan_network
 
 
@@ -452,22 +454,31 @@ def start_printer_print_route(ip: str):
         return jsonify({"error": "JSON field 'path' is required"}), 400
 
     if not start_printer_print(ip, file_path):
+        log_activity(ip, "error", f"Failed to start print manually: {file_path}")
         return jsonify({
             "ip": ip,
             "path": file_path,
             "error": "Invalid stored G-code path or printer is unreachable",
         }), 502
 
+    log_activity(ip, "success", f"Started print manually: {file_path}")
     return jsonify({"ip": ip, "path": file_path, "status": "print_started"}), 202
 
 
 def _control_printer(ip: str, action: str):
     if not control_printer(ip, action):
+        log_activity(ip, "error", f"Failed to send '{action}' command to printer")
         return jsonify({
             "ip": ip,
             "action": action,
             "error": "Printer is unreachable or does not support this action",
         }), 502
+    
+    log_activity(
+        ip,
+        "warning" if action in ["pause", "stop"] else "info",
+        f"Sent '{action}' command to printer"
+    )
     return jsonify({"ip": ip, "action": action, "status": f"{action}_sent"}), 202
 
 
@@ -732,4 +743,34 @@ def delete_queue_item_route(item_id: int):
         return jsonify({"error": "Print queue item not found"}), 404
 
     return jsonify({"deleted": deleted})
+
+
+@app.get("/activity")
+def get_activity_route():
+    """Get the latest activity logs.
+    ---
+    tags:
+      - Activity Logs
+    parameters:
+      - name: limit
+        in: query
+        required: false
+        type: integer
+      - name: printer_ip
+        in: query
+        required: false
+        type: string
+    responses:
+      200:
+        description: A list of activity logs
+    """
+    limit = request.args.get("limit", 50, type=int)
+    printer_ip = request.args.get("printer_ip", type=str)
+
+    query = ActivityLog.query
+    if printer_ip:
+        query = query.filter_by(printer_ip=printer_ip)
+    
+    logs = query.order_by(ActivityLog.created_at.desc()).limit(limit).all()
+    return jsonify([log.to_dict() for log in logs])
 

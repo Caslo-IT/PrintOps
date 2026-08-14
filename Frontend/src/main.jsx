@@ -9,6 +9,7 @@ import { PrinterList } from './components/dashboard/PrinterList'
 import { PrintersWorkspace } from './components/dashboard/PrintersWorkspace'
 import { GCodeStorageWorkspace } from './components/storage/GCodeStorageWorkspace'
 import { QueueWorkspace } from './components/queue/QueueWorkspace'
+import { ActivityLogWorkspace } from './components/activity/ActivityLogWorkspace'
 import { API_BASE, normalizePrinter } from './data/printers'
 import { api } from './services/api'
 import './styles.css'
@@ -156,6 +157,8 @@ function App() {
             <GCodeStorageWorkspace onNotify={notify} onNavigateToQueue={() => setActiveView('queue')} />
           ) : activeView === 'queue' ? (
             <QueueWorkspace onNotify={notify} />
+          ) : activeView === 'activity' ? (
+            <ActivityLogWorkspace onNotify={notify} />
           ) : (
             <>
               {/* Overview View */}
