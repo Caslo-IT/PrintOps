@@ -35,8 +35,9 @@ function App() {
     }, 4000)
   }, [])
 
-  const scan = useCallback(async () => {
-    setScanning(true)
+  const scan = useCallback(async (isBackground = false) => {
+    const isAutoRefresh = isBackground === true
+    if (!isAutoRefresh) setScanning(true)
     try {
       const data = await api.scanPrinters()
       const result = Array.isArray(data.printers) ? data.printers.map(normalizePrinter) : []
@@ -44,12 +45,14 @@ function App() {
       setSelected((current) => result.find((printer) => printer.ip === current?.ip) || result[0] || null)
       setApiError('')
     } catch (err) {
-      setPrinters([])
-      setSelected(null)
+      if (!isAutoRefresh) {
+        setPrinters([])
+        setSelected(null)
+      }
       setApiError(`Could not connect to backend API: ${err.message}`)
     }
-    setLastUpdated('just now')
-    setScanning(false)
+    setLastUpdated(new Date().toLocaleTimeString())
+    if (!isAutoRefresh) setScanning(false)
   }, [])
 
   const loadCounts = useCallback(async () => {
@@ -68,6 +71,13 @@ function App() {
   useEffect(() => {
     scan()
     loadCounts()
+
+    const intervalId = setInterval(() => {
+      scan(true)
+      loadCounts()
+    }, 10000)
+
+    return () => clearInterval(intervalId)
   }, [scan, loadCounts])
 
   useEffect(() => {
