@@ -18,7 +18,8 @@ from .gcode_storage import (
     list_gcode_folders,
     save_gcode_file,
 )
-from .models import db
+from .models import db, User
+from .auth import token_required, admin_required, check_password, generate_token, hash_password
 from .protocols import control_printer, start_printer_print, upload_printer_file
 from .queue_manager import (
     delete_queue_item,
@@ -28,6 +29,8 @@ from .queue_manager import (
     schedule_print_queue,
     update_queue_item,
 )
+from .activity_logger import log_activity, track_printer_state
+from .models import ActivityLog
 from .services import get_printer_files, get_printer_status, scan_network
 
 
@@ -39,6 +42,67 @@ db.init_app(app)
 migrate = Migrate(app, db)
 
 
+
+
+@app.post("/auth/login")
+def login():
+    data = request.get_json() or {}
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
+        
+    user = User.query.filter_by(username=username).first()
+    if not user or not check_password(password, user.password_hash):
+        return jsonify({"error": "Invalid credentials"}), 401
+        
+    token = generate_token(user.id, user.username, user.role)
+    return jsonify({
+        "token": token,
+        "user": user.to_dict()
+    })
+
+@app.get("/users")
+@admin_required
+def list_users():
+    users = User.query.all()
+    return jsonify({"users": [u.to_dict() for u in users]})
+
+@app.post("/users")
+@admin_required
+def create_user():
+    data = request.get_json() or {}
+    username = data.get("username")
+    password = data.get("password")
+    role = data.get("role", "user")
+    
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
+        
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "Username already exists"}), 400
+        
+    user = User(
+        username=username,
+        password_hash=hash_password(password),
+        role=role
+    )
+    db.session.add(user)
+    db.session.commit()
+    
+    return jsonify({"message": "User created", "user": user.to_dict()}), 201
+
+@app.delete("/users/<int:user_id>")
+@admin_required
+def delete_user(user_id):
+    user = User.query.get_or_404(user_id)
+    if user.username == "admin":
+        return jsonify({"error": "Cannot delete primary admin"}), 403
+        
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({"message": "User deleted"}), 200
 
 @app.after_request
 def add_cors_headers(response):
@@ -60,6 +124,7 @@ swagger = Swagger(app, template={
 
 
 @app.get("/")
+@token_required
 def home():
     """Service health check.
     ---
@@ -80,6 +145,7 @@ def home():
 
 
 @app.get("/printers")
+@token_required
 def find_printers():
     """Scan the network for reachable printers.
     ---
@@ -102,6 +168,10 @@ def find_printers():
               nullable: true
     """
     printers = scan_network()
+    for p in printers:
+        if p.get("ip") and p.get("state"):
+            track_printer_state(p["ip"], p["state"], p.get("name"))
+            
     return jsonify({
         "count": len(printers),
         "printers": printers,
@@ -113,6 +183,7 @@ def find_printers():
 
 
 @app.get("/printer/<ip>")
+@token_required
 def single_printer(ip: str):
     """Get the current status of one printer.
     ---
@@ -131,10 +202,13 @@ def single_printer(ip: str):
           type: object
     """
     data = get_printer_status(ip)
+    if data and data.get("state"):
+        track_printer_state(ip, data["state"], data.get("name"))
     return jsonify(data or {"error": "Printer not found"})
 
 
 @app.get("/printer/<ip>/files")
+@token_required
 def printer_files(ip: str):
     """Get G-code files currently stored on one printer.
     ---
@@ -178,6 +252,7 @@ def _storage_error_response(error: StorageError):
 
 
 @app.post("/gcode/folders")
+@token_required
 def create_gcode_folder_route():
     """Create a local G-code folder with size subfolders.
     ---
@@ -213,6 +288,7 @@ def create_gcode_folder_route():
 
 
 @app.get("/gcode/folders")
+@token_required
 def list_gcode_folders_route():
     """List local G-code folders.
     ---
@@ -226,6 +302,7 @@ def list_gcode_folders_route():
 
 
 @app.post("/gcode/files")
+@token_required
 def upload_local_gcode_file_route():
     """Store a G-code file in local storage and save its path in PostgreSQL.
     ---
@@ -268,6 +345,7 @@ def upload_local_gcode_file_route():
 
 
 @app.get("/gcode/files")
+@token_required
 def list_local_gcode_files_route():
     """List local G-code files stored in PostgreSQL.
     ---
@@ -300,6 +378,7 @@ def list_local_gcode_files_route():
 
 
 @app.get("/gcode/files/<int:file_id>")
+@token_required
 def view_local_gcode_file_route(file_id: int):
     """Download or view a local G-code file by database id.
     ---
@@ -334,6 +413,7 @@ def view_local_gcode_file_route(file_id: int):
 
 
 @app.delete("/gcode/files/<int:file_id>")
+@token_required
 def delete_local_gcode_file_route(file_id: int):
     """Delete a local G-code file and its PostgreSQL record.
     ---
@@ -364,6 +444,7 @@ def delete_local_gcode_file_route(file_id: int):
 
 
 @app.post("/printer/<ip>/files")
+@token_required
 def upload_printer_file_route(ip: str):
     """Upload a G-code file to the printer storage.
     ---
@@ -414,6 +495,7 @@ def upload_printer_file_route(ip: str):
 
 
 @app.post("/printer/<ip>/print")
+@token_required
 def start_printer_print_route(ip: str):
     """Start a G-code file already stored on the printer.
     ---
@@ -452,26 +534,36 @@ def start_printer_print_route(ip: str):
         return jsonify({"error": "JSON field 'path' is required"}), 400
 
     if not start_printer_print(ip, file_path):
+        log_activity(ip, "error", f"Failed to start print manually: {file_path}")
         return jsonify({
             "ip": ip,
             "path": file_path,
             "error": "Invalid stored G-code path or printer is unreachable",
         }), 502
 
+    log_activity(ip, "success", f"Started print manually: {file_path}")
     return jsonify({"ip": ip, "path": file_path, "status": "print_started"}), 202
 
 
 def _control_printer(ip: str, action: str):
     if not control_printer(ip, action):
+        log_activity(ip, "error", f"Failed to send '{action}' command to printer")
         return jsonify({
             "ip": ip,
             "action": action,
             "error": "Printer is unreachable or does not support this action",
         }), 502
+    
+    log_activity(
+        ip,
+        "warning" if action in ["pause", "stop"] else "info",
+        f"Sent '{action}' command to printer"
+    )
     return jsonify({"ip": ip, "action": action, "status": f"{action}_sent"}), 202
 
 
 @app.post("/printer/<ip>/pause")
+@token_required
 def pause_printer(ip: str):
     """Pause the active print.
     ---
@@ -492,6 +584,7 @@ def pause_printer(ip: str):
 
 
 @app.post("/printer/<ip>/resume")
+@token_required
 def resume_printer(ip: str):
     """Resume the paused print.
     ---
@@ -512,6 +605,7 @@ def resume_printer(ip: str):
 
 
 @app.post("/printer/<ip>/stop")
+@token_required
 def stop_printer(ip: str):
     """Cancel the active print.
     ---
@@ -532,6 +626,7 @@ def stop_printer(ip: str):
 
 
 @app.post("/queue/schedule")
+@token_required
 def schedule_queue_route():
     """Schedule selected G-code files into the print queue with priority and auto-assign printers.
     ---
@@ -581,6 +676,7 @@ def schedule_queue_route():
 
 
 @app.get("/queue")
+@token_required
 def get_queue_route():
     """Get the active print queue.
     ---
@@ -613,6 +709,7 @@ def get_queue_route():
 
 
 @app.get("/queue/printers")
+@token_required
 def get_printers_queue_status_route():
     """Get printers with their availability, remaining print time, and assigned upcoming jobs.
     ---
@@ -631,6 +728,7 @@ def get_printers_queue_status_route():
 
 
 @app.put("/queue/items/<int:item_id>")
+@token_required
 def update_queue_item_route(item_id: int):
     """Update priority, status, or printer assignment of a queue item.
     ---
@@ -680,6 +778,7 @@ def update_queue_item_route(item_id: int):
 
 
 @app.post("/queue/items/<int:item_id>/dispatch")
+@token_required
 def dispatch_queue_item_route(item_id: int):
     """Dispatch an assigned queue item (uploads G-code to printer and starts print).
     ---
@@ -707,6 +806,7 @@ def dispatch_queue_item_route(item_id: int):
 
 
 @app.delete("/queue/items/<int:item_id>")
+@token_required
 def delete_queue_item_route(item_id: int):
     """Remove an item from the print queue.
     ---
@@ -732,4 +832,35 @@ def delete_queue_item_route(item_id: int):
         return jsonify({"error": "Print queue item not found"}), 404
 
     return jsonify({"deleted": deleted})
+
+
+@app.get("/activity")
+@token_required
+def get_activity_route():
+    """Get the latest activity logs.
+    ---
+    tags:
+      - Activity Logs
+    parameters:
+      - name: limit
+        in: query
+        required: false
+        type: integer
+      - name: printer_ip
+        in: query
+        required: false
+        type: string
+    responses:
+      200:
+        description: A list of activity logs
+    """
+    limit = request.args.get("limit", 50, type=int)
+    printer_ip = request.args.get("printer_ip", type=str)
+
+    query = ActivityLog.query
+    if printer_ip:
+        query = query.filter_by(printer_ip=printer_ip)
+    
+    logs = query.order_by(ActivityLog.created_at.desc()).limit(limit).all()
+    return jsonify([log.to_dict() for log in logs])
 

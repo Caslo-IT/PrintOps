@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { HardDrive, Play, Upload, X, Zap } from 'lucide-react'
 import { api } from '../../services/api'
+import { ConfirmModal } from '../common/ConfirmModal'
 
 export function PrinterStorageModal({ printer, onClose, onNotify }) {
   const [files, setFiles] = useState([])
@@ -9,6 +10,7 @@ export function PrinterStorageModal({ printer, onClose, onNotify }) {
   const [error, setError] = useState('')
   const [startingPath, setStartingPath] = useState('')
   const [schedulingPath, setSchedulingPath] = useState('')
+  const [confirmConfig, setConfirmConfig] = useState(null)
 
   const fetchFiles = async () => {
     if (!printer) return
@@ -44,8 +46,17 @@ export function PrinterStorageModal({ printer, onClose, onNotify }) {
     }
   }
 
-  const handleStartPrint = async (fileObj) => {
+  const handleStartPrint = (fileObj) => {
     const path = fileObj.path || fileObj.filename || fileObj.name
+    setConfirmConfig({
+      action: () => executeStartPrint(path, fileObj),
+      title: 'Start Print',
+      message: `Are you sure you want to start printing ${path} on ${printer.name}?`,
+      isDanger: false
+    })
+  }
+
+  const executeStartPrint = async (path, fileObj) => {
     setStartingPath(path)
     try {
       await api.startPrinterPrint(printer.ip, path)
@@ -58,9 +69,18 @@ export function PrinterStorageModal({ printer, onClose, onNotify }) {
     }
   }
 
-  const handleScheduleQueue = async (fileObj) => {
+  const handleScheduleQueue = (fileObj) => {
     const path = fileObj.path || fileObj.filename || fileObj.name
     const name = fileObj.filename || fileObj.name || path.split('/').pop()
+    setConfirmConfig({
+      action: () => executeScheduleQueue(path, name),
+      title: 'Schedule Job',
+      message: `Are you sure you want to schedule ${name} to the print queue?`,
+      isDanger: false
+    })
+  }
+
+  const executeScheduleQueue = async (path, name) => {
     setSchedulingPath(path)
     try {
       await api.schedulePrintQueue([
@@ -164,6 +184,16 @@ export function PrinterStorageModal({ printer, onClose, onNotify }) {
           </button>
         </div>
       </div>
+      
+      <ConfirmModal
+        isOpen={!!confirmConfig}
+        title={confirmConfig?.title}
+        message={confirmConfig?.message}
+        confirmText="Yes, continue"
+        isDanger={confirmConfig?.isDanger}
+        onConfirm={() => confirmConfig && confirmConfig.action()}
+        onCancel={() => setConfirmConfig(null)}
+      />
     </div>
   )
 }

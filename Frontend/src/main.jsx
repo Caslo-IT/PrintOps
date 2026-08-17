@@ -9,11 +9,18 @@ import { PrinterList } from './components/dashboard/PrinterList'
 import { PrintersWorkspace } from './components/dashboard/PrintersWorkspace'
 import { GCodeStorageWorkspace } from './components/storage/GCodeStorageWorkspace'
 import { QueueWorkspace } from './components/queue/QueueWorkspace'
+import { ActivityLogWorkspace } from './components/activity/ActivityLogWorkspace'
+import { SettingsWorkspace } from './components/settings/SettingsWorkspace'
+import { HelpCenterWorkspace } from './components/help/HelpCenterWorkspace'
 import { API_BASE, normalizePrinter } from './data/printers'
 import { api } from './services/api'
+import { AuthProvider, useAuth } from './components/auth/AuthContext'
+import { Login } from './components/auth/Login'
 import './styles.css'
 
 function App() {
+  const { isAuthenticated, logout } = useAuth()
+  
   const [printers, setPrinters] = useState([])
   const [selected, setSelected] = useState(null)
   const [query, setQuery] = useState('')
@@ -23,6 +30,7 @@ function App() {
   const [activeView, setActiveView] = useState('overview')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [desktopNavOpen, setDesktopNavOpen] = useState(true)
+  const [lastLogId, setLastLogId] = useState(null)
 
   const [queueCount, setQueueCount] = useState(0)
   const [storageCount, setStorageCount] = useState(0)
@@ -68,17 +76,48 @@ function App() {
     }
   }, [])
 
+  const checkActivity = useCallback(async () => {
+    try {
+      const logs = await api.getActivityLogs(5)
+      if (!logs || logs.length === 0) return
+
+      setLastLogId((prevId) => {
+        if (prevId === null) {
+          return logs[0].id // Initial load, don't notify for past events
+        }
+
+        const newLogs = logs.filter(log => log.id > prevId)
+        if (newLogs.length > 0) {
+          // Notify for the most recent event if there are multiple
+          const newest = newLogs[0]
+          // Prefix with printer name or IP if available for context
+          const printerIdentifier = newest.printer_name || newest.printer_ip
+          const prefix = printerIdentifier ? `[${printerIdentifier}] ` : ''
+          notify(`${prefix}${newest.message}`, newest.event_type)
+          return newest.id
+        }
+        return prevId
+      })
+    } catch {
+      // ignore
+    }
+  }, [notify])
+
   useEffect(() => {
+    if (!isAuthenticated) return
+
     scan()
     loadCounts()
+    checkActivity()
 
     const intervalId = setInterval(() => {
       scan(true)
       loadCounts()
+      checkActivity()
     }, 10000)
 
     return () => clearInterval(intervalId)
-  }, [scan, loadCounts])
+  }, [scan, loadCounts, checkActivity, isAuthenticated])
 
   useEffect(() => {
     const closeOnEscape = (event) => event.key === 'Escape' && setMobileNavOpen(false)
@@ -95,6 +134,10 @@ function App() {
     }),
     [printers]
   )
+
+  if (!isAuthenticated) {
+    return <Login />
+  }
 
   return (
     <div className="min-h-screen bg-[#f7f8fa] text-slate-950">
@@ -136,6 +179,16 @@ function App() {
             setDesktopNavOpen((open) => !open)
             setMobileNavOpen((open) => !open)
           }}
+          query={query}
+          onQueryChange={setQuery}
+          onSearchSubmit={() => {
+            setActiveView('printers')
+            loadCounts()
+          }}
+          onNotificationClick={() => {
+            setActiveView('activity')
+            loadCounts()
+          }}
         />
 
         <div className="mx-auto max-w-[1500px] px-5 py-7 sm:px-8 sm:py-10">
@@ -156,6 +209,12 @@ function App() {
             <GCodeStorageWorkspace onNotify={notify} onNavigateToQueue={() => setActiveView('queue')} />
           ) : activeView === 'queue' ? (
             <QueueWorkspace onNotify={notify} />
+          ) : activeView === 'activity' ? (
+            <ActivityLogWorkspace onNotify={notify} />
+          ) : activeView === 'settings' ? (
+            <SettingsWorkspace onNotify={notify} />
+          ) : activeView === 'help' ? (
+            <HelpCenterWorkspace />
           ) : (
             <>
               {/* Overview View */}
@@ -227,4 +286,8 @@ function App() {
   )
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+createRoot(document.getElementById('root')).render(
+  <AuthProvider>
+    <App />
+  </AuthProvider>
+)

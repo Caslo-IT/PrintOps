@@ -1,7 +1,9 @@
 import React from 'react'
-import { Activity, Boxes, CircleHelp, HardDrive, LayoutDashboard, Printer, Settings } from 'lucide-react'
+import { Activity, Boxes, CircleHelp, HardDrive, LayoutDashboard, Printer, Settings, LogOut } from 'lucide-react'
+import { useAuth } from '../auth/AuthContext'
 
 export function Sidebar({ printerCount, queueCount, storageCount, activeView, onNavigate, mobileOpen, desktopOpen, onClose }) {
+  const { logout } = useAuth()
   return (
     <>
       {mobileOpen && (
@@ -49,10 +51,30 @@ export function Sidebar({ printerCount, queueCount, storageCount, activeView, on
             active={activeView === 'storage'}
             onClick={() => onNavigate('storage')}
           />
-          <NavItem icon={<Activity size={17} />} label="Activity log" />
+          <NavItem
+            icon={<Activity size={17} />}
+            label="Activity log"
+            active={activeView === 'activity'}
+            onClick={() => onNavigate('activity')}
+          />
           <div className="mb-3 mt-10 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-400">Manage</div>
-          <NavItem icon={<Settings size={17} />} label="Settings" />
-          <NavItem icon={<CircleHelp size={17} />} label="Help center" />
+          <NavItem
+            icon={<Settings size={17} />}
+            label="Settings"
+            active={activeView === 'settings'}
+            onClick={() => onNavigate('settings')}
+          />
+          <NavItem
+            icon={<CircleHelp size={17} />}
+            label="Help center"
+            active={activeView === 'help'}
+            onClick={() => onNavigate('help')}
+          />
+          <NavItem
+            icon={<LogOut size={17} />}
+            label="Sign Out"
+            onClick={logout}
+          />
         </nav>
         <div className="m-4 rounded-2xl bg-slate-950 p-4 text-white">
           <div className="mb-3 flex items-center justify-between">

@@ -2,15 +2,50 @@ import { API_BASE } from '../data/printers'
 
 async function request(url, options = {}) {
   const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`
+  
+  // Attach JWT token if it exists
+  const token = localStorage.getItem('token')
+  if (token) {
+    options.headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    }
+  }
+
   const response = await fetch(fullUrl, options)
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
+    if (response.status === 401) {
+       // Handle unauthorized globally
+       localStorage.removeItem('token')
+       localStorage.removeItem('user')
+       window.location.reload()
+    }
     throw new Error(data.error || `Request failed with status ${response.status}`)
   }
   return data
 }
 
 export const api = {
+  // Auth & Users
+  login: (username, password) => 
+    request('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    }),
+  getUsers: () => request('/users'),
+  createUser: (userData) =>
+    request('/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userData)
+    }),
+  deleteUser: (id) =>
+    request(`/users/${id}`, {
+      method: 'DELETE'
+    }),
+
   // Printers
   scanPrinters: () => request('/printers'),
   getPrinterStatus: (ip) => request(`/printer/${ip}`),
@@ -102,4 +137,13 @@ export const api = {
     request(`/queue/items/${id}`, {
       method: 'DELETE',
     }),
+
+  // Activity Logs
+  getActivityLogs: (limit = 50, printerIp = null) => {
+    const params = new URLSearchParams()
+    if (limit) params.set('limit', limit)
+    if (printerIp) params.set('printer_ip', printerIp)
+    const queryString = params.toString()
+    return request(`/activity${queryString ? `?${queryString}` : ''}`)
+  },
 }

@@ -8,6 +8,7 @@ from .gcode_storage import DatabaseUnavailable, StorageError
 from .models import GCodeFile, PrintQueueItem, db
 from .protocols import start_printer_print, upload_printer_file
 from .services import scan_network
+from .activity_logger import log_activity, track_printer_state
 
 
 def init_queue_table():
@@ -37,6 +38,9 @@ def get_printers_with_availability(mock_printers=None):
         state = (p.get("state") or "unknown").lower()
         progress = float(p.get("progress") or 0.0)
 
+        if ip and state:
+            track_printer_state(ip, state, p.get("name"))
+
         # Check if printer is actively printing an assigned queue item in DB
         active_item = None
         if ip:
@@ -64,7 +68,17 @@ def get_printers_with_availability(mock_printers=None):
         if is_available:
             remaining_sec = 0.0
         else:
-            if progress > 0 and progress < 100 and estimated_duration > 0:
+            printer_left_time = p.get("details", {}).get("printLeftTime")
+            parsed_left_time = None
+            if printer_left_time is not None:
+                try:
+                    parsed_left_time = float(printer_left_time)
+                except (ValueError, TypeError):
+                    pass
+            
+            if parsed_left_time is not None and parsed_left_time > 0:
+                remaining_sec = parsed_left_time
+            elif progress > 0 and progress < 100 and estimated_duration > 0:
                 remaining_sec = estimated_duration * (1.0 - (progress / 100.0))
             else:
                 remaining_sec = estimated_duration or 300.0
@@ -196,6 +210,13 @@ def schedule_print_queue(job_requests, mock_printers=None):
             created_items.append(item)
 
         db.session.commit()
+        for item in created_items:
+            log_activity(
+                item.printer_ip,
+                "info",
+                f"Job scheduled: {item.filename}",
+                {"job_id": item.id, "priority": item.priority}
+            )
         return [item.to_dict() for item in created_items]
     except SQLAlchemyError as exc:
         db.session.rollback()
@@ -301,6 +322,13 @@ def update_queue_item(item_id, priority=None, status=None, printer_ip=None):
 
         item.updated_at = datetime.now(timezone.utc)
         db.session.commit()
+        if status is not None:
+            log_activity(
+                item.printer_ip,
+                "error" if status in ["failed", "cancelled"] else "info",
+                f"Job {item.filename} status changed to {status}",
+                {"job_id": item.id, "status": status}
+            )
         return item.to_dict()
     except StorageError:
         raise
@@ -322,6 +350,12 @@ def delete_queue_item(item_id):
         item_dict = item.to_dict()
         db.session.delete(item)
         db.session.commit()
+        log_activity(
+            item_dict.get("printer_ip"),
+            "warning",
+            f"Job {item_dict.get('filename')} removed from queue",
+            {"job_id": item_id}
+        )
         return item_dict
     except SQLAlchemyError as exc:
         db.session.rollback()
@@ -381,5 +415,12 @@ def dispatch_queue_item(item_id, mock_printers=None):
     item.actual_start_time = now
     item.updated_at = now
     db.session.commit()
+
+    log_activity(
+        item.printer_ip,
+        "success",
+        f"Print started: {item.filename}",
+        {"job_id": item.id}
+    )
 
     return item.to_dict()

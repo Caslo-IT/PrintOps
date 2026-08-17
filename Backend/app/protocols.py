@@ -102,6 +102,7 @@ async def get_creality_status(ip):
             "progress": field(status_message, "printProgress", "progress", default=0),
             "nozzle": field(status_message, "nozzleTemp", "temperature", default=0),
             "bed": field(status_message, "bedTemp", default=0),
+            "name": field(status_message, "hostname", default=None) or field(status_message, "model", default=None),
             "web_ui": f"http://{ip}:80",
             "camera": f"http://{ip}:80",
             "details": status_message,
@@ -213,6 +214,7 @@ def get_moonraker_status(ip):
             "progress": status.get("virtual_sdcard", {}).get("progress", 0),
             "nozzle": status.get("extruder", {}).get("temperature", 0),
             "bed": status.get("heater_bed", {}).get("temperature", 0),
+            "name": response.json().get("result", {}).get("status", {}).get("mcu", {}).get("mcu_name") or None,
             "camera": f"http://{ip}:4408/webcam/?action=stream",
         }
     except (requests.RequestException, ValueError, KeyError, TypeError):
