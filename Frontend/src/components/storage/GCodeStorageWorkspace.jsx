@@ -67,7 +67,7 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
     setCreatingFolder(true)
     try {
       const created = await api.createGCodeFolder(newFolderName.trim())
-      onNotify?.(`Folder '${created.name}' created with size subfolders`)
+      onNotify?.(`Folder '${created.folder}' created with size subfolders`)
       setNewFolderName('')
       setCreateFolderModalOpen(false)
       loadData()
@@ -166,7 +166,7 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
           </button>
           <button
             onClick={() => {
-              if (folders.length > 0) setUploadFolder(folders[0].name)
+              if (folders.length > 0) setUploadFolder(folders[0].folder)
               setUploadModalOpen(true)
             }}
             className="primary-button"
@@ -189,8 +189,8 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
             >
               <option value="">All folders ({folders.length})</option>
               {folders.map((f) => (
-                <option key={f.name} value={f.name}>
-                  {f.name}
+                <option key={f.folder} value={f.folder}>
+                  {f.folder}
                 </option>
               ))}
             </select>
@@ -366,8 +366,8 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
                   className="w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-orange-500"
                 >
                   {folders.map((f) => (
-                    <option key={f.name} value={f.name}>
-                      {f.name}
+                    <option key={f.folder} value={f.folder}>
+                      {f.folder}
                     </option>
                   ))}
                 </select>
