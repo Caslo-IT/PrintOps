@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from app.api import app, db
-from app.models import GCodeAnalysis, GCodeFile, PrintQueueItem
+from app.models import GCodeAnalysis, GCodeFile, PrintQueueItem, User
+from app.auth import generate_token
 from app.queue_manager import (
     delete_queue_item,
     dispatch_queue_item,
@@ -28,6 +29,13 @@ class TestPrintQueueManager(unittest.TestCase):
         self.app_context = app.app_context()
         self.app_context.push()
         db.create_all()
+
+        # Create a test admin user and token
+        self.admin = User(username="admin_test", password_hash="hash", role="admin")
+        db.session.add(self.admin)
+        db.session.commit()
+        self.token = generate_token(self.admin.id, self.admin.username, self.admin.role)
+        self.headers = {"Authorization": f"Bearer {self.token}"}
 
         # Seed sample G-code files with analysis
         self.file1 = GCodeFile(
@@ -135,6 +143,7 @@ class TestPrintQueueManager(unittest.TestCase):
         # POST /queue/schedule
         resp = client.post(
             "/queue/schedule",
+            headers=self.headers,
             json={
                 "jobs": [
                     {"gcode_file_id": self.file1.id, "priority": 1},
@@ -148,7 +157,7 @@ class TestPrintQueueManager(unittest.TestCase):
         self.assertEqual(len(data["scheduled"]), 2)
 
         # GET /queue
-        resp = client.get("/queue")
+        resp = client.get("/queue", headers=self.headers)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.get_json()["queue"]), 2)
 
@@ -156,13 +165,14 @@ class TestPrintQueueManager(unittest.TestCase):
         item_id = data["scheduled"][0]["id"]
         resp = client.put(
             f"/queue/items/{item_id}",
+            headers=self.headers,
             json={"priority": 10, "status": "completed"},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json()["queue_item"]["status"], "completed")
 
         # DELETE /queue/items/1
-        resp = client.delete(f"/queue/items/{item_id}")
+        resp = client.delete(f"/queue/items/{item_id}", headers=self.headers)
         self.assertEqual(resp.status_code, 200)
 
 
