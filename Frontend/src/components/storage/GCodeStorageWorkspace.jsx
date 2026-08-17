@@ -2,15 +2,22 @@ import React, { useEffect, useState } from 'react'
 import { Calendar, Clock, Download, FileText, FolderPlus, Layers, Plus, RefreshCw, Trash2, Upload, Zap } from 'lucide-react'
 import { formatDuration, formatTemperature } from '../../data/printers'
 import { api } from '../../services/api'
+import { ConfirmModal } from '../common/ConfirmModal'
 
 const SIZE_OPTIONS = ['1ft', '1.5ft', '2ft', '2.5ft', '3ft', '3.5ft', '4ft', '4.5ft', '5ft', '5.5ft', '6ft']
 
+let cachedFolders = []
+let cachedFiles = []
+let cachedSelectedFolder = ''
+let cachedSelectedSize = ''
+let hasCachedStorageData = false
+
 export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
-  const [folders, setFolders] = useState([])
-  const [files, setFiles] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [selectedFolder, setSelectedFolder] = useState('')
-  const [selectedSize, setSelectedSize] = useState('')
+  const [folders, setFolders] = useState(cachedFolders)
+  const [files, setFiles] = useState(cachedFiles)
+  const [loading, setLoading] = useState(!hasCachedStorageData)
+  const [selectedFolder, setSelectedFolder] = useState(cachedSelectedFolder)
+  const [selectedSize, setSelectedSize] = useState(cachedSelectedSize)
 
   const [createFolderModalOpen, setCreateFolderModalOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -21,20 +28,28 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
   const [uploadSize, setUploadSize] = useState('1ft')
   const [uploadFile, setUploadFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [confirmConfig, setConfirmConfig] = useState(null)
 
   const [scheduleModalItem, setScheduleModalItem] = useState(null)
   const [schedulePriority, setSchedulePriority] = useState(1)
   const [scheduling, setScheduling] = useState(false)
 
   const loadData = async () => {
-    setLoading(true)
+    if (!hasCachedStorageData) setLoading(true)
     try {
       const [foldersData, filesData] = await Promise.all([
         api.listGCodeFolders(),
         api.listGCodeFiles(selectedFolder, selectedSize),
       ])
-      setFolders(foldersData.folders || [])
-      setFiles(filesData.files || [])
+      
+      cachedFolders = foldersData.folders || []
+      cachedFiles = filesData.files || []
+      cachedSelectedFolder = selectedFolder
+      cachedSelectedSize = selectedSize
+      hasCachedStorageData = true
+      
+      setFolders(cachedFolders)
+      setFiles(cachedFiles)
     } catch (err) {
       onNotify?.(`Failed to load storage data: ${err.message}`, 'error')
     } finally {
@@ -83,8 +98,16 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
     }
   }
 
-  const handleDelete = async (id, filename) => {
-    if (!window.confirm(`Are you sure you want to delete ${filename}?`)) return
+  const handleDelete = (id, filename) => {
+    setConfirmConfig({
+      action: () => executeDelete(id, filename),
+      title: 'Delete File',
+      message: `Are you sure you want to delete ${filename}?`,
+      isDanger: true
+    })
+  }
+
+  const executeDelete = async (id, filename) => {
     try {
       await api.deleteGCodeFile(id)
       onNotify?.(`Deleted ${filename}`)
@@ -94,9 +117,18 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
     }
   }
 
-  const handleScheduleQueue = async (e) => {
+  const handleScheduleQueue = (e) => {
     e.preventDefault()
     if (!scheduleModalItem) return
+    setConfirmConfig({
+      action: executeScheduleQueue,
+      title: 'Schedule Job',
+      message: `Are you sure you want to schedule ${scheduleModalItem.filename} to the print queue?`,
+      isDanger: false
+    })
+  }
+
+  const executeScheduleQueue = async () => {
     setScheduling(true)
     try {
       await api.schedulePrintQueue([
@@ -418,6 +450,16 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
           </div>
         </div>
       )}
+      
+      <ConfirmModal
+        isOpen={!!confirmConfig}
+        title={confirmConfig?.title}
+        message={confirmConfig?.message}
+        confirmText="Yes, continue"
+        isDanger={confirmConfig?.isDanger}
+        onConfirm={() => confirmConfig && confirmConfig.action()}
+        onCancel={() => setConfirmConfig(null)}
+      />
     </div>
   )
 }

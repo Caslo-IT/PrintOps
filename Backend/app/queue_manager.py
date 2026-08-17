@@ -8,7 +8,7 @@ from .gcode_storage import DatabaseUnavailable, StorageError
 from .models import GCodeFile, PrintQueueItem, db
 from .protocols import start_printer_print, upload_printer_file
 from .services import scan_network
-from .activity_logger import log_activity
+from .activity_logger import log_activity, track_printer_state
 
 
 def init_queue_table():
@@ -37,6 +37,9 @@ def get_printers_with_availability(mock_printers=None):
         ip = p.get("ip")
         state = (p.get("state") or "unknown").lower()
         progress = float(p.get("progress") or 0.0)
+
+        if ip and state:
+            track_printer_state(ip, state, p.get("name"))
 
         # Check if printer is actively printing an assigned queue item in DB
         active_item = None

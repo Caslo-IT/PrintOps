@@ -6,4 +6,5 @@ websockets
 flask-sqlalchemy
 flask-migrate
 python-dotenv
-
+PyJWT
+bcrypt

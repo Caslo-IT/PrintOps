@@ -2,16 +2,21 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Activity, AlertTriangle, CheckCircle, Info, RefreshCw } from 'lucide-react'
 import { api } from '../../services/api'
 
+let cachedLogs = []
+let hasCachedLogs = false
+
 export function ActivityLogWorkspace({ onNotify }) {
-  const [logs, setLogs] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [logs, setLogs] = useState(cachedLogs)
+  const [loading, setLoading] = useState(!hasCachedLogs)
   const [error, setError] = useState(null)
 
   const fetchLogs = useCallback(async (isBackground = false) => {
-    if (!isBackground) setLoading(true)
+    if (!isBackground && !hasCachedLogs) setLoading(true)
     try {
       const data = await api.getActivityLogs(100)
-      setLogs(Array.isArray(data) ? data : [])
+      cachedLogs = Array.isArray(data) ? data : []
+      hasCachedLogs = true
+      setLogs(cachedLogs)
       setError(null)
     } catch (err) {
       setError(`Failed to load activity logs: ${err.message}`)
@@ -114,7 +119,7 @@ export function ActivityLogWorkspace({ onNotify }) {
                       {log.message}
                     </td>
                     <td className="px-6 py-3.5 text-slate-500">
-                      {log.printer_ip || '—'}
+                      {log.printer_name || log.printer_ip || '—'}
                     </td>
                     <td className="px-6 py-3.5 text-xs text-slate-400">
                       {formatTime(log.created_at)}

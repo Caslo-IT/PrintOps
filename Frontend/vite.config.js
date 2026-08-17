@@ -12,6 +12,8 @@ export default defineConfig({
       '/gcode': 'http://127.0.0.1:5000',
       '/queue': 'http://127.0.0.1:5000',
       '/activity': 'http://127.0.0.1:5000',
+      '/auth': 'http://127.0.0.1:5000',
+      '/users': 'http://127.0.0.1:5000',
     },
   },
 })

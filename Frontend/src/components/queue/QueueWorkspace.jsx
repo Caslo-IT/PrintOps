@@ -2,14 +2,21 @@ import React, { useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle2, Clock, Edit2, HardDrive, Play, Plus, Printer, RefreshCw, Send, Trash2 } from 'lucide-react'
 import { formatDuration, normalizePrinter } from '../../data/printers'
 import { api } from '../../services/api'
+import { ConfirmModal } from '../common/ConfirmModal'
 import { StatusBadge } from '../dashboard/StatusBadge'
 
+let cachedQueue = []
+let cachedPrintersQueueStatus = []
+let cachedStatusFilter = ''
+let cachedPrinterFilter = ''
+let hasCachedQueueData = false
+
 export function QueueWorkspace({ onNotify }) {
-  const [queue, setQueue] = useState([])
-  const [printersQueueStatus, setPrintersQueueStatus] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [statusFilter, setStatusFilter] = useState('')
-  const [printerFilter, setPrinterFilter] = useState('')
+  const [queue, setQueue] = useState(cachedQueue)
+  const [printersQueueStatus, setPrintersQueueStatus] = useState(cachedPrintersQueueStatus)
+  const [statusFilter, setStatusFilter] = useState(cachedStatusFilter)
+  const [printerFilter, setPrinterFilter] = useState(cachedPrinterFilter)
+  const [loading, setLoading] = useState(!hasCachedQueueData)
 
   // Edit item modal
   const [editItem, setEditItem] = useState(null)
@@ -28,6 +35,7 @@ export function QueueWorkspace({ onNotify }) {
 
   // Printer storage file schedule state
   const [selectedPrinterIp, setSelectedPrinterIp] = useState('')
+  const [localTargetPrinter, setLocalTargetPrinter] = useState('')
   const [printerFiles, setPrinterFiles] = useState([])
   const [loadingPrinterFiles, setLoadingPrinterFiles] = useState(false)
   const [selectedPrinterFilePath, setSelectedPrinterFilePath] = useState('')
@@ -35,16 +43,24 @@ export function QueueWorkspace({ onNotify }) {
   const [schedulePriority, setSchedulePriority] = useState(1)
   const [scheduling, setScheduling] = useState(false)
   const [dispatchingId, setDispatchingId] = useState(null)
+  const [confirmConfig, setConfirmConfig] = useState(null)
 
   const loadData = async () => {
-    setLoading(true)
+    if (!hasCachedQueueData) setLoading(true)
     try {
       const [queueData, printersData] = await Promise.all([
         api.getPrintQueue(statusFilter, printerFilter),
         api.getPrintersQueueStatus(),
       ])
-      setQueue(queueData.queue || [])
-      setPrintersQueueStatus(printersData.printers || [])
+      
+      cachedQueue = queueData.queue || []
+      cachedPrintersQueueStatus = printersData.printers || []
+      cachedStatusFilter = statusFilter
+      cachedPrinterFilter = printerFilter
+      hasCachedQueueData = true
+      
+      setQueue(cachedQueue)
+      setPrintersQueueStatus(cachedPrintersQueueStatus)
     } catch (err) {
       onNotify?.(`Failed to load queue data: ${err.message}`, 'error')
     } finally {
@@ -82,7 +98,16 @@ export function QueueWorkspace({ onNotify }) {
     }
   }, [sourceType, selectedPrinterIp])
 
-  const handleDispatch = async (item) => {
+  const handleDispatch = (item) => {
+    setConfirmConfig({
+      action: () => executeDispatch(item),
+      title: 'Dispatch Job',
+      message: `Are you sure you want to dispatch Job #${item.id} to printer ${item.printer_ip}?`,
+      isDanger: false
+    })
+  }
+
+  const executeDispatch = async (item) => {
     setDispatchingId(item.id)
     try {
       await api.dispatchQueueItem(item.id)
@@ -95,8 +120,16 @@ export function QueueWorkspace({ onNotify }) {
     }
   }
 
-  const handleDelete = async (id) => {
-    if (!window.confirm(`Are you sure you want to remove item #${id} from queue?`)) return
+  const handleDelete = (id) => {
+    setConfirmConfig({
+      action: () => executeDelete(id),
+      title: 'Remove Job',
+      message: `Are you sure you want to remove item #${id} from the queue?`,
+      isDanger: true
+    })
+  }
+
+  const executeDelete = async (id) => {
     try {
       await api.deleteQueueItem(id)
       onNotify?.(`Removed item #${id} from print queue`)
@@ -150,14 +183,27 @@ export function QueueWorkspace({ onNotify }) {
     }
   }
 
-  const handleScheduleJob = async (e) => {
+  const handleScheduleJob = (e) => {
     e.preventDefault()
+    setConfirmConfig({
+      action: executeScheduleJob,
+      title: 'Schedule Job',
+      message: 'Are you sure you want to schedule this job to the queue?',
+      isDanger: false
+    })
+  }
+
+  const executeScheduleJob = async () => {
     setScheduling(true)
     try {
       if (sourceType === 'local') {
         if (!selectedFileId) return
         await api.schedulePrintQueue([
-          { gcode_file_id: Number(selectedFileId), priority: Number(schedulePriority) },
+          { 
+            gcode_file_id: Number(selectedFileId), 
+            priority: Number(schedulePriority),
+            printer_ip: localTargetPrinter || null
+          },
         ])
         onNotify?.('Scheduled local G-code file into queue')
       } else {
@@ -500,20 +546,45 @@ export function QueueWorkspace({ onNotify }) {
 
             <form onSubmit={handleScheduleJob} className="p-5 space-y-4">
               {sourceType === 'local' ? (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Select Server G-Code File</label>
-                  <select
-                    value={selectedFileId}
-                    onChange={(e) => setSelectedFileId(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-orange-500"
-                  >
-                    {gcodeFiles.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.filename} ({f.folder} / {f.size})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Select Server G-Code File</label>
+                    <select
+                      value={selectedFileId}
+                      onChange={(e) => setSelectedFileId(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-orange-500"
+                    >
+                      {gcodeFiles.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.filename} ({f.folder} / {f.size})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Target Printer</label>
+                    <select
+                      value={localTargetPrinter}
+                      onChange={(e) => setLocalTargetPrinter(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-orange-500"
+                    >
+                      <option value="">🤖 Auto-assign (Fastest Available)</option>
+                      {printersQueueStatus.map((p, idx) => {
+                        const norm = normalizePrinter(p, idx)
+                        const baseName = norm.name ? norm.name.split('—')[0].trim() : 'Creality Printer'
+                        const statusText = p.available 
+                          ? '✅ Available Now' 
+                          : `⏳ Busy (Done in ${formatDuration(p.remaining_time_seconds || p.remaining_sec || 0)})`
+                        
+                        return (
+                          <option key={p.ip} value={p.ip}>
+                            {baseName} ({p.ip}) — {statusText}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                </>
               ) : (
                 <>
                   <div>
@@ -523,15 +594,19 @@ export function QueueWorkspace({ onNotify }) {
                       onChange={(e) => setSelectedPrinterIp(e.target.value)}
                       className="w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-orange-500"
                     >
-                  {printersQueueStatus.map((p, idx) => {
-                    const norm = normalizePrinter(p, idx)
-                    const baseName = norm.name ? norm.name.split('—')[0].trim() : 'Creality Printer'
-                    return (
-                      <option key={p.ip} value={p.ip}>
-                        {baseName} ({p.ip})
-                      </option>
-                    )
-                  })}
+                      {printersQueueStatus.map((p, idx) => {
+                        const norm = normalizePrinter(p, idx)
+                        const baseName = norm.name ? norm.name.split('—')[0].trim() : 'Creality Printer'
+                        const statusText = p.available 
+                          ? 'Available Now' 
+                          : `Busy (${formatDuration(p.remaining_time_seconds || p.remaining_sec || 0)})`
+                          
+                        return (
+                          <option key={p.ip} value={p.ip}>
+                            {baseName} ({p.ip}) — {statusText}
+                          </option>
+                        )
+                      })}
                     </select>
                   </div>
 
@@ -594,6 +669,16 @@ export function QueueWorkspace({ onNotify }) {
           </div>
         </div>
       )}
+      
+      <ConfirmModal
+        isOpen={!!confirmConfig}
+        title={confirmConfig?.title}
+        message={confirmConfig?.message}
+        confirmText="Yes, continue"
+        isDanger={confirmConfig?.isDanger}
+        onConfirm={() => confirmConfig && confirmConfig.action()}
+        onCancel={() => setConfirmConfig(null)}
+      />
     </div>
   )
 }

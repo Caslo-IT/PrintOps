@@ -6,6 +6,31 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 
 
+class User(db.Model):
+    """ORM model representing a user for authentication."""
+
+    __tablename__ = "users"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default="user") # 'admin' or 'user'
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    def to_dict(self):
+        """Convert ORM model instance to dictionary representation."""
+        return {
+            "id": self.id,
+            "username": self.username,
+            "role": self.role,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class GCodeFile(db.Model):
     """ORM model representing stored G-code files."""
 
@@ -179,6 +204,7 @@ class ActivityLog(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     printer_ip = db.Column(db.Text, nullable=True)
+    printer_name = db.Column(db.Text, nullable=True)
     event_type = db.Column(db.String(50), nullable=False, default="info")
     message = db.Column(db.Text, nullable=False)
     details = db.Column(db.JSON, nullable=True)
@@ -193,6 +219,7 @@ class ActivityLog(db.Model):
         return {
             "id": self.id,
             "printer_ip": self.printer_ip,
+            "printer_name": self.printer_name,
             "event_type": self.event_type,
             "message": self.message,
             "details": self.details,

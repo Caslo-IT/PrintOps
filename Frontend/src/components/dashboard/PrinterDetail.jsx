@@ -2,12 +2,14 @@ import React, { useState } from 'react'
 import { ExternalLink, Gauge, HardDrive, Pause, Play, Square, Thermometer } from 'lucide-react'
 import { formatTemperature, isActiveJob } from '../../data/printers'
 import { api } from '../../services/api'
+import { ConfirmModal } from '../common/ConfirmModal'
 import { PrinterStorageModal } from './PrinterStorageModal'
 import { StatusBadge } from './StatusBadge'
 
 export function PrinterDetail({ printer, onRefresh, onNotify }) {
   const [storageOpen, setStorageOpen] = useState(false)
   const [busyAction, setBusyAction] = useState('')
+  const [confirmConfig, setConfirmConfig] = useState(null)
 
   if (!printer)
     return (
@@ -18,7 +20,17 @@ export function PrinterDetail({ printer, onRefresh, onNotify }) {
 
   const activeJob = isActiveJob(printer.state)
 
-  const handleControl = async (action) => {
+  const handleControl = (action) => {
+    const actionName = action === 'stop' ? 'cancel the current print' : action + ' the print'
+    setConfirmConfig({
+      action,
+      title: `${action.charAt(0).toUpperCase() + action.slice(1)} Print`,
+      message: `Are you sure you want to ${actionName} on ${printer.name}?`,
+      isDanger: action === 'stop'
+    })
+  }
+
+  const executeControl = async (action) => {
     setBusyAction(action)
     try {
       if (action === 'pause') await api.pausePrinter(printer.ip)
@@ -129,6 +141,15 @@ export function PrinterDetail({ printer, onRefresh, onNotify }) {
       {storageOpen && (
         <PrinterStorageModal printer={printer} onClose={() => setStorageOpen(false)} onNotify={onNotify} />
       )}
+      <ConfirmModal
+        isOpen={!!confirmConfig}
+        title={confirmConfig?.title}
+        message={confirmConfig?.message}
+        confirmText="Yes, continue"
+        isDanger={confirmConfig?.isDanger}
+        onConfirm={() => confirmConfig && executeControl(confirmConfig.action)}
+        onCancel={() => setConfirmConfig(null)}
+      />
     </>
   )
 }
