@@ -146,4 +146,31 @@ export const api = {
     const queryString = params.toString()
     return request(`/activity${queryString ? `?${queryString}` : ''}`)
   },
+
+  // Print History
+  getPrintHistory: (limit = 100) => {
+    const params = new URLSearchParams()
+    if (limit) params.set('limit', limit)
+    const queryString = params.toString()
+    return request(`/history${queryString ? `?${queryString}` : ''}`)
+  },
+
+  // Filaments
+  getFilaments: () => request('/filaments'),
+  createFilament: (filamentData) =>
+    request('/filaments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(filamentData),
+    }),
+  updateFilament: (id, updates) =>
+    request(`/filaments/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }),
+  deleteFilament: (id) =>
+    request(`/filaments/${id}`, {
+      method: 'DELETE',
+    }),
 }

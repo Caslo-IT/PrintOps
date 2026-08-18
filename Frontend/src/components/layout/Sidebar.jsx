@@ -1,5 +1,5 @@
 import React from 'react'
-import { Activity, Boxes, CircleHelp, HardDrive, LayoutDashboard, Printer, Settings, LogOut } from 'lucide-react'
+import { Activity, Boxes, CircleHelp, HardDrive, LayoutDashboard, Printer, Settings, LogOut, History, Disc } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 
 export function Sidebar({ printerCount, queueCount, storageCount, activeView, onNavigate, mobileOpen, desktopOpen, onClose }) {
@@ -56,6 +56,18 @@ export function Sidebar({ printerCount, queueCount, storageCount, activeView, on
             label="Activity log"
             active={activeView === 'activity'}
             onClick={() => onNavigate('activity')}
+          />
+          <NavItem
+            icon={<History size={17} />}
+            label="Print History"
+            active={activeView === 'history'}
+            onClick={() => onNavigate('history')}
+          />
+          <NavItem
+            icon={<Disc size={17} />}
+            label="Filaments"
+            active={activeView === 'filaments'}
+            onClick={() => onNavigate('filaments')}
           />
           <div className="mb-3 mt-10 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-400">Manage</div>
           <NavItem

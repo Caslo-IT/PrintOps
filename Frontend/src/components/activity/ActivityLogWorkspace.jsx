@@ -31,10 +31,10 @@ export function ActivityLogWorkspace({ onNotify }) {
   useEffect(() => {
     fetchLogs()
 
-    // Auto-refresh logs every 10 seconds
+    // Auto-refresh logs every 5 seconds
     const interval = setInterval(() => {
       fetchLogs(true)
-    }, 10000)
+    }, 5000)
     
     return () => clearInterval(interval)
   }, [fetchLogs])
@@ -77,10 +77,6 @@ export function ActivityLogWorkspace({ onNotify }) {
           <h2 className="mt-3 text-[30px] font-bold tracking-[-.055em] sm:text-[36px]">System Activity</h2>
           <p className="mt-1 text-sm text-slate-500">Monitor all printer events and queue activity.</p>
         </div>
-        <button onClick={() => fetchLogs(false)} disabled={loading} className="primary-button">
-          <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
       </div>
 
       {error && (

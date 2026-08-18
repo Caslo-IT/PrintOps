@@ -226,3 +226,66 @@ class ActivityLog(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
+
+class PrintHistory(db.Model):
+    """ORM model representing the history of a print job."""
+
+    __tablename__ = "print_history"
+
+    id = db.Column(db.Integer, primary_key=True)
+    printer_ip = db.Column(db.Text, nullable=True)
+    printer_name = db.Column(db.Text, nullable=True)
+    filename = db.Column(db.Text, nullable=True)
+    start_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    end_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    status = db.Column(db.String(50), nullable=False, default="printing")
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    def to_dict(self):
+        """Convert ORM model instance to dictionary representation."""
+        return {
+            "id": self.id,
+            "printer_ip": self.printer_ip,
+            "printer_name": self.printer_name,
+            "filename": self.filename,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Filament(db.Model):
+    """ORM model representing a spool of filament."""
+
+    __tablename__ = "filaments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    material = db.Column(db.String(50), nullable=False, default="PLA")
+    color = db.Column(db.String(50), nullable=False, default="Black")
+    total_weight_g = db.Column(db.Float, nullable=False, default=1000.0)
+    remaining_weight_g = db.Column(db.Float, nullable=False, default=1000.0)
+    assigned_printer_ip = db.Column(db.Text, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    def to_dict(self):
+        """Convert ORM model instance to dictionary representation."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "material": self.material,
+            "color": self.color,
+            "total_weight_g": self.total_weight_g,
+            "remaining_weight_g": self.remaining_weight_g,
+            "assigned_printer_ip": self.assigned_printer_ip,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

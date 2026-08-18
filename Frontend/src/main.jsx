@@ -10,6 +10,8 @@ import { PrintersWorkspace } from './components/dashboard/PrintersWorkspace'
 import { GCodeStorageWorkspace } from './components/storage/GCodeStorageWorkspace'
 import { QueueWorkspace } from './components/queue/QueueWorkspace'
 import { ActivityLogWorkspace } from './components/activity/ActivityLogWorkspace'
+import { HistoryWorkspace } from './components/history/HistoryWorkspace'
+import { FilamentsWorkspace } from './components/filaments/FilamentsWorkspace'
 import { SettingsWorkspace } from './components/settings/SettingsWorkspace'
 import { HelpCenterWorkspace } from './components/help/HelpCenterWorkspace'
 import { API_BASE, normalizePrinter } from './data/printers'
@@ -211,6 +213,10 @@ function App() {
             <QueueWorkspace onNotify={notify} />
           ) : activeView === 'activity' ? (
             <ActivityLogWorkspace onNotify={notify} />
+          ) : activeView === 'history' ? (
+            <HistoryWorkspace onNotify={notify} />
+          ) : activeView === 'filaments' ? (
+            <FilamentsWorkspace onNotify={notify} />
           ) : activeView === 'settings' ? (
             <SettingsWorkspace onNotify={notify} />
           ) : activeView === 'help' ? (
