@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from app.api import app, db
-from app.models import GCodeAnalysis, GCodeFile, PrintQueueItem, User
+from app.models import GCodeAnalysis, GCodeFile, PrintQueueItem, User, Filament
 from app.auth import generate_token
 from app.queue_manager import (
     delete_queue_item,
@@ -64,7 +64,25 @@ class TestPrintQueueManager(unittest.TestCase):
             total_weight_g=30.0,
         )
 
-        db.session.add_all([self.file1, self.analysis1, self.file2, self.analysis2])
+        self.filament1 = Filament(
+            name="Test PLA",
+            material="PLA",
+            color="Black",
+            total_weight_g=1000.0,
+            remaining_weight_g=1000.0,
+            assigned_printer_ip="192.168.1.10"
+        )
+        
+        self.filament2 = Filament(
+            name="Test PETG",
+            material="PETG",
+            color="White",
+            total_weight_g=1000.0,
+            remaining_weight_g=1000.0,
+            assigned_printer_ip="192.168.1.11"
+        )
+
+        db.session.add_all([self.file1, self.analysis1, self.file2, self.analysis2, self.filament1, self.filament2])
         db.session.commit()
 
         self.mock_printers = [
