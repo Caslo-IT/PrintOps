@@ -168,15 +168,17 @@ def schedule_print_queue(job_requests, mock_printers=None):
 
     # Track scheduled available time per printer IP
     printer_schedules = {}
+    ip_to_name = {}
     for p in printers:
         if p.get("ip"):
             printer_schedules[p["ip"]] = p["next_available_at"]
+            ip_to_name[p["ip"]] = p.get("name") or p.get("ip")
 
     # Map of currently assigned filaments
-    active_filaments = Filament.query.filter(Filament.assigned_printer_ip.isnot(None)).all()
+    active_filaments = Filament.query.filter(Filament.assigned_printer_name.isnot(None)).all()
     # Create dictionary instead of object since we mutate values and don't want to accidentally commit pending scheduled logic yet
     printer_filament_map = {
-        f.assigned_printer_ip: {"remaining_weight_g": f.remaining_weight_g}
+        f.assigned_printer_name: {"remaining_weight_g": f.remaining_weight_g}
         for f in active_filaments
     }
 
@@ -201,7 +203,8 @@ def schedule_print_queue(job_requests, mock_printers=None):
                 eligible_ips = []
                 if weight_g > 0:
                     for ip in printer_schedules.keys():
-                        f = printer_filament_map.get(ip)
+                        printer_name = ip_to_name.get(ip)
+                        f = printer_filament_map.get(printer_name)
                         if f and f["remaining_weight_g"] >= weight_g:
                             eligible_ips.append(ip)
                 else:
@@ -218,20 +221,23 @@ def schedule_print_queue(job_requests, mock_printers=None):
                 completion_time = start_time + timedelta(seconds=duration)
                 printer_schedules[assigned_ip] = completion_time
                 status = "assigned"
-                if assigned_ip in printer_filament_map:
-                    printer_filament_map[assigned_ip]["remaining_weight_g"] -= weight_g
+                printer_name = ip_to_name.get(assigned_ip)
+                if printer_name in printer_filament_map:
+                    printer_filament_map[printer_name]["remaining_weight_g"] -= weight_g
             elif assigned_ip:
                 start_time = now
                 completion_time = start_time + timedelta(seconds=duration)
                 status = "assigned"
-                if assigned_ip in printer_filament_map:
-                    printer_filament_map[assigned_ip]["remaining_weight_g"] -= weight_g
+                printer_name = ip_to_name.get(assigned_ip)
+                if printer_name in printer_filament_map:
+                    printer_filament_map[printer_name]["remaining_weight_g"] -= weight_g
 
             item = PrintQueueItem(
                 gcode_file_id=gcode_file.id if gcode_file else None,
                 printer_file_path=printer_file_path,
                 filename=filename,
                 printer_ip=assigned_ip,
+                printer_name=ip_to_name.get(assigned_ip),
                 priority=priority,
                 status=status,
                 estimated_duration_sec=duration,
@@ -353,7 +359,7 @@ def update_queue_item(item_id, priority=None, status=None, printer_ip=None):
                 # Deduct filament usage
                 if item.gcode_file and item.gcode_file.analysis:
                     weight_g = item.gcode_file.analysis.total_weight_g
-                    f = Filament.query.filter_by(assigned_printer_ip=item.printer_ip).first()
+                    f = Filament.query.filter_by(assigned_printer_name=item.printer_name).first()
                     if f and weight_g > 0:
                         f.remaining_weight_g = max(0.0, f.remaining_weight_g - weight_g)
 

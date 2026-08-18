@@ -835,7 +835,7 @@ def create_filament_route():
         color=payload.get("color", "Black"),
         total_weight_g=float(payload.get("total_weight_g", 1000.0)),
         remaining_weight_g=float(payload.get("remaining_weight_g", 1000.0)),
-        assigned_printer_ip=payload.get("assigned_printer_ip"),
+        assigned_printer_name=payload.get("assigned_printer_name"),
     )
     db.session.add(f)
     db.session.commit()
@@ -869,15 +869,15 @@ def update_filament_route(filament_id: int):
     if "remaining_weight_g" in payload:
         f.remaining_weight_g = float(payload["remaining_weight_g"])
     
-    # Check if assigned_printer_ip is being updated
-    if "assigned_printer_ip" in payload:
-        ip = payload["assigned_printer_ip"]
-        if ip:
+    # Check if assigned_printer_name is being updated
+    if "assigned_printer_name" in payload:
+        name = payload["assigned_printer_name"]
+        if name:
             # Check if another filament is already assigned to this printer, unassign it if so
-            existing = Filament.query.filter_by(assigned_printer_ip=ip).first()
+            existing = Filament.query.filter_by(assigned_printer_name=name).first()
             if existing and existing.id != f.id:
-                existing.assigned_printer_ip = None
-        f.assigned_printer_ip = ip
+                existing.assigned_printer_name = None
+        f.assigned_printer_name = name
 
     db.session.commit()
     return jsonify({"filament": f.to_dict()})

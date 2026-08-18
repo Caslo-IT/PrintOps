@@ -15,7 +15,7 @@ export function FilamentsWorkspace({ onNotify }) {
     color: 'Black',
     total_weight_g: 1000,
     remaining_weight_g: 1000,
-    assigned_printer_ip: '',
+    assigned_printer_name: '',
   })
 
   const loadData = useCallback(async () => {
@@ -46,7 +46,7 @@ export function FilamentsWorkspace({ onNotify }) {
         color: filament.color,
         total_weight_g: filament.total_weight_g,
         remaining_weight_g: filament.remaining_weight_g,
-        assigned_printer_ip: filament.assigned_printer_ip || '',
+        assigned_printer_name: filament.assigned_printer_name || '',
       })
     } else {
       setEditingId(null)
@@ -56,7 +56,7 @@ export function FilamentsWorkspace({ onNotify }) {
         color: 'Black',
         total_weight_g: 1000,
         remaining_weight_g: 1000,
-        assigned_printer_ip: '',
+        assigned_printer_name: '',
       })
     }
     setIsModalOpen(true)
@@ -73,7 +73,7 @@ export function FilamentsWorkspace({ onNotify }) {
         ...formData,
         total_weight_g: Number(formData.total_weight_g),
         remaining_weight_g: Number(formData.remaining_weight_g),
-        assigned_printer_ip: formData.assigned_printer_ip || null,
+        assigned_printer_name: formData.assigned_printer_name || null,
       }
       if (editingId) {
         await api.updateFilament(editingId, payload)
@@ -128,7 +128,7 @@ export function FilamentsWorkspace({ onNotify }) {
         {filaments.map((filament) => {
           const percentage = Math.max(0, Math.min(100, (filament.remaining_weight_g / filament.total_weight_g) * 100))
           const isLow = filament.remaining_weight_g < 200 // Threshold for low balance
-          const assignedPrinter = printers.find(p => p.ip === filament.assigned_printer_ip)
+          const assignedPrinter = printers.find(p => (p.name || p.ip) === filament.assigned_printer_name)
           
           return (
             <div key={filament.id} className="card p-5 group flex flex-col justify-between">
@@ -173,8 +173,8 @@ export function FilamentsWorkspace({ onNotify }) {
               <div className="mt-6 pt-4 border-t border-slate-100">
                 <p className="text-sm">
                   <span className="text-slate-500">Assigned to: </span>
-                  {assignedPrinter ? (
-                    <span className="font-medium text-slate-900">{assignedPrinter.name || filament.assigned_printer_ip}</span>
+                  {filament.assigned_printer_name ? (
+                    <span className="font-medium text-slate-900">{filament.assigned_printer_name}</span>
                   ) : (
                     <span className="text-slate-400 italic">None</span>
                   )}
@@ -272,12 +272,12 @@ export function FilamentsWorkspace({ onNotify }) {
                 <label className="mb-1 block text-sm font-medium text-slate-700">Assign to Printer</label>
                 <select
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  value={formData.assigned_printer_ip}
-                  onChange={(e) => setFormData({ ...formData, assigned_printer_ip: e.target.value })}
+                  value={formData.assigned_printer_name}
+                  onChange={(e) => setFormData({ ...formData, assigned_printer_name: e.target.value })}
                 >
                   <option value="">Unassigned</option>
                   {printers.map(p => (
-                    <option key={p.ip} value={p.ip}>{p.name || p.ip}</option>
+                    <option key={p.ip} value={p.name || p.ip}>{p.name || p.ip}</option>
                   ))}
                 </select>
               </div>
