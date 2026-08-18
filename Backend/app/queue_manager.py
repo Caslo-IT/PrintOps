@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy.exc import SQLAlchemyError
 
 from .gcode_storage import DatabaseUnavailable, StorageError
-from .models import GCodeFile, PrintQueueItem, db
+from .models import GCodeFile, PrintQueueItem, Filament, db
 from .protocols import start_printer_print, upload_printer_file
 from .services import scan_network
 from .activity_logger import log_activity, track_printer_state
@@ -41,33 +41,28 @@ def get_printers_with_availability(mock_printers=None):
         if ip and state:
             track_printer_state(ip, state, p.get("name"))
 
-        # Check if printer is actively printing an assigned queue item in DB
-        active_item = None
+        # Check all active/assigned queue items in DB
+        assigned_items = []
+        printing_item = None
         if ip:
             try:
-                active_item = (
-                    PrintQueueItem.query.filter(
-                        PrintQueueItem.printer_ip == ip,
-                        PrintQueueItem.status.in_(["printing", "assigned"]),
-                    )
-                    .order_by(PrintQueueItem.updated_at.desc())
-                    .first()
-                )
+                items = PrintQueueItem.query.filter(
+                    PrintQueueItem.printer_ip == ip,
+                    PrintQueueItem.status.in_(["printing", "assigned"]),
+                ).all()
+                for item in items:
+                    if item.status == "printing":
+                        printing_item = item
+                    else:
+                        assigned_items.append(item)
             except Exception:
-                active_item = None
-
-        estimated_duration = (
-            active_item.estimated_duration_sec
-            if active_item and active_item.estimated_duration_sec > 0
-            else 0.0
-        )
+                pass
 
         is_idle = state in ["idle", "completed"] or progress >= 100.0
         is_available = is_idle and state != "error"
 
-        if is_available:
-            remaining_sec = 0.0
-        else:
+        current_remaining = 0.0
+        if not is_available:
             printer_left_time = p.get("details", {}).get("printLeftTime")
             parsed_left_time = None
             if printer_left_time is not None:
@@ -77,11 +72,20 @@ def get_printers_with_availability(mock_printers=None):
                     pass
             
             if parsed_left_time is not None and parsed_left_time > 0:
-                remaining_sec = parsed_left_time
-            elif progress > 0 and progress < 100 and estimated_duration > 0:
-                remaining_sec = estimated_duration * (1.0 - (progress / 100.0))
+                current_remaining = parsed_left_time
+            elif progress > 0 and progress < 100 and printing_item and printing_item.estimated_duration_sec > 0:
+                current_remaining = printing_item.estimated_duration_sec * (1.0 - (progress / 100.0))
             else:
-                remaining_sec = estimated_duration or 300.0
+                current_remaining = printing_item.estimated_duration_sec if printing_item and printing_item.estimated_duration_sec > 0 else 300.0
+
+        assigned_remaining = sum(
+            item.estimated_duration_sec for item in assigned_items if item.estimated_duration_sec
+        )
+        
+        remaining_sec = current_remaining + assigned_remaining
+        
+        if assigned_remaining > 0:
+            is_available = False
 
         next_available = now + timedelta(seconds=remaining_sec)
 
@@ -123,6 +127,7 @@ def schedule_print_queue(job_requests, mock_printers=None):
 
         gcode_file = None
         duration = 0.0
+        weight_g = 0.0
 
         if gcode_file_id:
             gcode_file = db.session.get(GCodeFile, gcode_file_id)
@@ -130,6 +135,11 @@ def schedule_print_queue(job_requests, mock_printers=None):
                 raise StorageError(f"G-code file ID {gcode_file_id} not found")
             duration = (
                 gcode_file.analysis.total_time_sec
+                if gcode_file.analysis
+                else 0.0
+            )
+            weight_g = (
+                gcode_file.analysis.total_weight_g
                 if gcode_file.analysis
                 else 0.0
             )
@@ -146,6 +156,7 @@ def schedule_print_queue(job_requests, mock_printers=None):
             "requested_printer_ip": req_printer_ip,
             "priority": priority,
             "duration": duration,
+            "weight_g": weight_g,
         })
 
     # Sort primarily by priority ascending (1 = highest priority)
@@ -161,6 +172,14 @@ def schedule_print_queue(job_requests, mock_printers=None):
         if p.get("ip"):
             printer_schedules[p["ip"]] = p["next_available_at"]
 
+    # Map of currently assigned filaments
+    active_filaments = Filament.query.filter(Filament.assigned_printer_ip.isnot(None)).all()
+    # Create dictionary instead of object since we mutate values and don't want to accidentally commit pending scheduled logic yet
+    printer_filament_map = {
+        f.assigned_printer_ip: {"remaining_weight_g": f.remaining_weight_g}
+        for f in active_filaments
+    }
+
     created_items = []
     try:
         for job in prepared_jobs:
@@ -170,6 +189,7 @@ def schedule_print_queue(job_requests, mock_printers=None):
             requested_ip = job["requested_printer_ip"]
             priority = job["priority"]
             duration = job["duration"]
+            weight_g = job["weight_g"]
 
             assigned_ip = requested_ip
             start_time = None
@@ -177,21 +197,35 @@ def schedule_print_queue(job_requests, mock_printers=None):
             status = "queued"
 
             if not assigned_ip and printer_schedules:
-                # Find printer with earliest next_available_at time
-                assigned_ip = min(
-                    printer_schedules.keys(),
-                    key=lambda ip: printer_schedules[ip],
-                )
+                # Find printers with enough filament
+                eligible_ips = []
+                if weight_g > 0:
+                    for ip in printer_schedules.keys():
+                        f = printer_filament_map.get(ip)
+                        if f and f["remaining_weight_g"] >= weight_g:
+                            eligible_ips.append(ip)
+                else:
+                    eligible_ips = list(printer_schedules.keys())
+                
+                if eligible_ips:
+                    assigned_ip = min(
+                        eligible_ips,
+                        key=lambda ip: printer_schedules[ip],
+                    )
 
             if assigned_ip in printer_schedules:
                 start_time = printer_schedules[assigned_ip]
                 completion_time = start_time + timedelta(seconds=duration)
                 printer_schedules[assigned_ip] = completion_time
                 status = "assigned"
+                if assigned_ip in printer_filament_map:
+                    printer_filament_map[assigned_ip]["remaining_weight_g"] -= weight_g
             elif assigned_ip:
                 start_time = now
                 completion_time = start_time + timedelta(seconds=duration)
                 status = "assigned"
+                if assigned_ip in printer_filament_map:
+                    printer_filament_map[assigned_ip]["remaining_weight_g"] -= weight_g
 
             item = PrintQueueItem(
                 gcode_file_id=gcode_file.id if gcode_file else None,
@@ -316,6 +350,12 @@ def update_queue_item(item_id, priority=None, status=None, printer_ip=None):
                 item.actual_start_time = datetime.now(timezone.utc)
             elif status == "completed" and not item.actual_completion_time:
                 item.actual_completion_time = datetime.now(timezone.utc)
+                # Deduct filament usage
+                if item.gcode_file and item.gcode_file.analysis:
+                    weight_g = item.gcode_file.analysis.total_weight_g
+                    f = Filament.query.filter_by(assigned_printer_ip=item.printer_ip).first()
+                    if f and weight_g > 0:
+                        f.remaining_weight_g = max(0.0, f.remaining_weight_g - weight_g)
 
         if printer_ip is not None:
             item.printer_ip = printer_ip if printer_ip.strip() else None

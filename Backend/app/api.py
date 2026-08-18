@@ -30,7 +30,7 @@ from .queue_manager import (
     update_queue_item,
 )
 from .activity_logger import log_activity, track_printer_state
-from .models import ActivityLog
+from .models import ActivityLog, PrintHistory, Filament
 from .services import get_printer_files, get_printer_status, scan_network
 
 
@@ -775,6 +775,132 @@ def update_queue_item_route(item_id: int):
         return jsonify({"error": "Print queue item not found"}), 404
 
     return jsonify({"queue_item": updated})
+
+
+@app.get("/history")
+@token_required
+def get_history_route():
+    """Get the print history.
+    ---
+    tags:
+      - Print History
+    parameters:
+      - name: limit
+        in: query
+        required: false
+        type: integer
+        default: 100
+    responses:
+      200:
+        description: List of print history records
+    """
+    limit = request.args.get("limit", 100, type=int)
+    history_records = PrintHistory.query.order_by(PrintHistory.id.desc()).limit(limit).all()
+    return jsonify({"history": [record.to_dict() for record in history_records]})
+
+
+@app.get("/filaments")
+@token_required
+def get_filaments_route():
+    """Get all filament spools.
+    ---
+    tags:
+      - Filaments
+    responses:
+      200:
+        description: List of filaments
+    """
+    filaments = Filament.query.all()
+    return jsonify({"filaments": [f.to_dict() for f in filaments]})
+
+
+@app.post("/filaments")
+@token_required
+def create_filament_route():
+    """Create a new filament spool.
+    ---
+    tags:
+      - Filaments
+    responses:
+      201:
+        description: Created filament
+    """
+    payload = request.get_json(silent=True) or {}
+    if not payload.get("name"):
+        return jsonify({"error": "name is required"}), 400
+
+    f = Filament(
+        name=payload.get("name"),
+        material=payload.get("material", "PLA"),
+        color=payload.get("color", "Black"),
+        total_weight_g=float(payload.get("total_weight_g", 1000.0)),
+        remaining_weight_g=float(payload.get("remaining_weight_g", 1000.0)),
+        assigned_printer_ip=payload.get("assigned_printer_ip"),
+    )
+    db.session.add(f)
+    db.session.commit()
+    return jsonify({"filament": f.to_dict()}), 201
+
+
+@app.put("/filaments/<int:filament_id>")
+@token_required
+def update_filament_route(filament_id: int):
+    """Update a filament spool (e.g. assign to printer, update weight).
+    ---
+    tags:
+      - Filaments
+    responses:
+      200:
+        description: Updated filament
+    """
+    payload = request.get_json(silent=True) or {}
+    f = db.session.get(Filament, filament_id)
+    if not f:
+        return jsonify({"error": "Filament not found"}), 404
+
+    if "name" in payload:
+        f.name = payload["name"]
+    if "material" in payload:
+        f.material = payload["material"]
+    if "color" in payload:
+        f.color = payload["color"]
+    if "total_weight_g" in payload:
+        f.total_weight_g = float(payload["total_weight_g"])
+    if "remaining_weight_g" in payload:
+        f.remaining_weight_g = float(payload["remaining_weight_g"])
+    
+    # Check if assigned_printer_ip is being updated
+    if "assigned_printer_ip" in payload:
+        ip = payload["assigned_printer_ip"]
+        if ip:
+            # Check if another filament is already assigned to this printer, unassign it if so
+            existing = Filament.query.filter_by(assigned_printer_ip=ip).first()
+            if existing and existing.id != f.id:
+                existing.assigned_printer_ip = None
+        f.assigned_printer_ip = ip
+
+    db.session.commit()
+    return jsonify({"filament": f.to_dict()})
+
+
+@app.delete("/filaments/<int:filament_id>")
+@token_required
+def delete_filament_route(filament_id: int):
+    """Delete a filament spool.
+    ---
+    tags:
+      - Filaments
+    responses:
+      200:
+        description: Deleted
+    """
+    f = db.session.get(Filament, filament_id)
+    if not f:
+        return jsonify({"error": "Filament not found"}), 404
+        
+    db.session.delete(f)
+    db.session.commit()
+    return jsonify({"message": "Filament deleted"})
 
 
 @app.post("/queue/items/<int:item_id>/dispatch")
