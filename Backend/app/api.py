@@ -29,8 +29,8 @@ from .queue_manager import (
     schedule_print_queue,
     update_queue_item,
 )
-from .activity_logger import log_activity, track_printer_state
-from .models import ActivityLog, PrintHistory, Filament
+from .activity_logger import log_activity, track_printer_state, get_filament_baseline, set_filament_baseline
+from .models import ActivityLog, GCodeFile, PrintHistory, Filament
 from .services import get_printer_files, get_printer_status, scan_network
 
 
@@ -46,6 +46,34 @@ migrate = Migrate(app, db)
 
 @app.post("/auth/login")
 def login():
+    """Authenticate user and get a JWT token.
+    ---
+    tags:
+      - Authentication
+    consumes:
+      - application/json
+    parameters:
+      - in: body
+        name: credentials
+        required: true
+        schema:
+          type: object
+          required:
+            - username
+            - password
+          properties:
+            username:
+              type: string
+            password:
+              type: string
+    responses:
+      200:
+        description: Successful authentication
+      400:
+        description: Missing credentials
+      401:
+        description: Invalid credentials
+    """
     data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
@@ -66,12 +94,49 @@ def login():
 @app.get("/users")
 @admin_required
 def list_users():
+    """List all users (Admin only).
+    ---
+    tags:
+      - Users
+    responses:
+      200:
+        description: List of all users
+    """
     users = User.query.all()
     return jsonify({"users": [u.to_dict() for u in users]})
 
 @app.post("/users")
 @admin_required
 def create_user():
+    """Create a new user (Admin only).
+    ---
+    tags:
+      - Users
+    consumes:
+      - application/json
+    parameters:
+      - in: body
+        name: user
+        required: true
+        schema:
+          type: object
+          required:
+            - username
+            - password
+          properties:
+            username:
+              type: string
+            password:
+              type: string
+            role:
+              type: string
+              enum: [user, admin]
+    responses:
+      201:
+        description: User created successfully
+      400:
+        description: Invalid input or username exists
+    """
     data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
@@ -96,6 +161,23 @@ def create_user():
 @app.delete("/users/<int:user_id>")
 @admin_required
 def delete_user(user_id):
+    """Delete a user (Admin only).
+    ---
+    tags:
+      - Users
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: User deleted successfully
+      403:
+        description: Cannot delete primary admin
+      404:
+        description: User not found
+    """
     user = User.query.get_or_404(user_id)
     if user.username == "admin":
         return jsonify({"error": "Cannot delete primary admin"}), 403
@@ -120,6 +202,19 @@ swagger = Swagger(app, template={
         "version": "1.0.0",
     },
     "basePath": "/",
+    "securityDefinitions": {
+        "Bearer": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header",
+            "description": 'JWT Authorization header using the Bearer scheme. Example: "Bearer {token}"'
+        }
+    },
+    "security": [
+        {
+            "Bearer": []
+        }
+    ]
 })
 
 
@@ -205,6 +300,209 @@ def single_printer(ip: str):
     if data and data.get("state"):
         track_printer_state(ip, data["state"], data.get("name"))
     return jsonify(data or {"error": "Printer not found"})
+
+
+@app.get("/printer/<ip>/print/progress")
+@token_required
+def printer_print_progress(ip: str):
+    """Get live filament usage and layer breakdown for the active print job on a printer.
+    ---
+    tags:
+      - Printers
+    parameters:
+      - name: ip
+        in: path
+        required: true
+        type: string
+        description: Printer IPv4 address or hostname
+    responses:
+      200:
+        description: >-
+          Live progress with per-layer filament stats and cumulative usage
+          for the current print job.
+        schema:
+          type: object
+          properties:
+            ip:
+              type: string
+            state:
+              type: string
+            progress:
+              type: number
+            job_filename:
+              type: string
+            filament:
+              type: object
+            layers:
+              type: object
+      404:
+        description: Printer is not reachable or is not currently printing
+    """
+    # 1. Fetch live printer status
+    printer_data = get_printer_status(ip)
+    if not printer_data:
+        return jsonify({"error": "Printer not reachable"}), 404
+
+    state = (printer_data.get("state") or "unknown").lower()
+    progress = float(printer_data.get("progress") or 0.0)
+    job_filename_raw = printer_data.get("job_filename") or ""
+    job_filename = job_filename_raw.split("/")[-1]  # strip any path prefix
+
+    # Trigger state tracking so the activity logger / filament deduction runs
+    track_printer_state(ip, state, printer_data.get("name"), progress=progress,
+                        job_filename=job_filename_raw)
+
+    # 2. Look up the G-code analysis for the current job
+    gcode = GCodeFile.query.filter_by(filename=job_filename).first() if job_filename else None
+    analysis = gcode.analysis if gcode else None
+
+    # ── Filament block ────────────────────────────────────────────────────────
+    # Works in ALL cases:
+    #   - GCodeFile found with layer stats  → most accurate (layer-by-layer sum)
+    #   - GCodeFile found, no layer stats   → linear interpolation
+    #   - No GCodeFile found                → no weight computation (noted)
+    #
+    # Baseline = spool remaining_weight_g at the moment this print started.
+    # If the baseline is missing (server restarted mid-print) we reconstruct it
+    # so deduction is not blocked.
+
+    # -- Find assigned filament spool (name match first, IP fallback) ----------
+    printer_name = printer_data.get("name")
+    filament_spool = None
+    if printer_name:
+        filament_spool = Filament.query.filter_by(
+            assigned_printer_name=printer_name
+        ).first()
+    if filament_spool is None:
+        filament_spool = Filament.query.filter_by(
+            assigned_printer_name=ip
+        ).first()
+
+    # -- Compute used_weight_g -------------------------------------------------
+    total_job_weight_g = 0.0
+    total_job_filament_mm = 0.0
+    used_weight_g = 0.0
+    used_filament_mm = 0.0
+    remaining_job_weight_g = 0.0
+    completed_layers_count = 0
+    layer_stats_for_block: list = []
+    gcode_found = analysis is not None
+
+    if analysis and analysis.total_weight_g > 0:
+        total_job_weight_g = analysis.total_weight_g
+        total_job_filament_mm = analysis.total_filament_mm
+        layer_stats_for_block = analysis.layer_stats or []
+        total_layers = len(layer_stats_for_block)
+
+        if total_layers > 0 and progress > 0:
+            completed_layers_count = max(
+                0, min(total_layers - 1, round(total_layers * progress / 100.0))
+            )
+            for stat in layer_stats_for_block[:completed_layers_count]:
+                used_weight_g += stat.get("weight_g", 0.0)
+                used_filament_mm += stat.get("filament_mm", 0.0)
+        else:
+            # Linear interpolation fallback
+            used_weight_g = total_job_weight_g * (progress / 100.0)
+            used_filament_mm = total_job_filament_mm * (progress / 100.0)
+
+        remaining_job_weight_g = max(0.0, total_job_weight_g - used_weight_g)
+
+    # -- Resolve / reconstruct baseline and write accurate remaining to DB -----
+    baseline = get_filament_baseline(ip)
+    spool_remaining_g = None
+    deduction_method = "none"
+
+    if filament_spool and state in ("printing", "completed") and progress > 0:
+        if baseline is None:
+            # Baseline missing: reconstruct from current DB value + used_weight_g.
+            # If incremental deductions already ran, current remaining is lower
+            # than it was at print start; adding back used_weight_g approximates
+            # the original value.
+            if gcode_found and used_weight_g > 0:
+                reconstructed = filament_spool.remaining_weight_g + used_weight_g
+            else:
+                # No GCode analysis: assume nothing has been deducted yet
+                reconstructed = filament_spool.remaining_weight_g
+            # Cap at total spool weight
+            baseline = min(reconstructed, filament_spool.total_weight_g)
+            set_filament_baseline(ip, baseline)
+            deduction_method = "reconstructed-baseline"
+        else:
+            deduction_method = "snapshot-baseline"
+
+        if gcode_found and total_job_weight_g > 0:
+            # Accurate: use layer-based (or linear-fallback) used_weight_g
+            accurate_remaining = max(0.0, baseline - used_weight_g)
+        else:
+            # No GCode analysis: fall back to simple linear deduction from baseline
+            accurate_remaining = max(
+                0.0, baseline * (1.0 - progress / 100.0)
+            )
+            deduction_method += "+linear-no-gcode"
+
+        filament_spool.remaining_weight_g = accurate_remaining
+        try:
+            db.session.commit()
+            spool_remaining_g = round(accurate_remaining, 2)
+        except Exception:
+            db.session.rollback()
+            spool_remaining_g = round(filament_spool.remaining_weight_g, 2)
+    elif filament_spool:
+        spool_remaining_g = round(filament_spool.remaining_weight_g, 2)
+        deduction_method = "idle-no-deduction"
+
+    filament_block: dict = {
+        "assigned_filament_name": filament_spool.name if filament_spool else None,
+        "assigned_filament_id": filament_spool.id if filament_spool else None,
+        "spool_remaining_g": spool_remaining_g,
+        "total_job_weight_g": round(total_job_weight_g, 2),
+        "total_job_filament_mm": round(total_job_filament_mm, 2),
+        "used_weight_g": round(used_weight_g, 2),
+        "used_filament_mm": round(used_filament_mm, 2),
+        "remaining_job_weight_g": round(remaining_job_weight_g, 2),
+        "gcode_analysis_found": gcode_found,
+        "deduction_method": deduction_method,
+    }
+
+    # 4. Build layers block
+    layer_stats_full = analysis.layer_stats if analysis else []
+    total_layers = len(layer_stats_full)
+    completed_layers = 0
+    if total_layers > 0 and progress > 0:
+        completed_layers = max(0, min(total_layers - 1,
+                                      round(total_layers * progress / 100.0)))
+
+    # Annotate each layer with a running cumulative weight
+    annotated_layers = []
+    cumulative_weight_g = 0.0
+    cumulative_filament_mm = 0.0
+    for i, stat in enumerate(layer_stats_full):
+        cumulative_weight_g += stat.get("weight_g", 0.0)
+        cumulative_filament_mm += stat.get("filament_mm", 0.0)
+        annotated_layers.append({
+            **stat,
+            "cumulative_weight_g": round(cumulative_weight_g, 4),
+            "cumulative_filament_mm": round(cumulative_filament_mm, 2),
+            "completed": i < completed_layers,
+        })
+
+    layers_block = {
+        "total": total_layers,
+        "completed_estimate": completed_layers,
+        "layer_stats": annotated_layers,
+    }
+
+    return jsonify({
+        "ip": ip,
+        "state": state,
+        "progress": round(progress, 2),
+        "job_filename": job_filename or None,
+        "nozzle_temp": printer_data.get("nozzle"),
+        "bed_temp": printer_data.get("bed"),
+        "filament": filament_block,
+        "layers": layers_block,
+    })
 
 
 @app.get("/printer/<ip>/files")
@@ -829,13 +1127,21 @@ def create_filament_route():
     if not payload.get("name"):
         return jsonify({"error": "name is required"}), 400
 
+    assigned_printer_name = payload.get("assigned_printer_name")
+    
+    # Check if any other filaments are already assigned to this printer, unassign them if so
+    if assigned_printer_name:
+        existing_filaments = Filament.query.filter_by(assigned_printer_name=assigned_printer_name).all()
+        for existing in existing_filaments:
+            existing.assigned_printer_name = None
+
     f = Filament(
         name=payload.get("name"),
         material=payload.get("material", "PLA"),
         color=payload.get("color", "Black"),
         total_weight_g=float(payload.get("total_weight_g", 1000.0)),
         remaining_weight_g=float(payload.get("remaining_weight_g", 1000.0)),
-        assigned_printer_name=payload.get("assigned_printer_name"),
+        assigned_printer_name=assigned_printer_name,
     )
     db.session.add(f)
     db.session.commit()
@@ -873,10 +1179,11 @@ def update_filament_route(filament_id: int):
     if "assigned_printer_name" in payload:
         name = payload["assigned_printer_name"]
         if name:
-            # Check if another filament is already assigned to this printer, unassign it if so
-            existing = Filament.query.filter_by(assigned_printer_name=name).first()
-            if existing and existing.id != f.id:
-                existing.assigned_printer_name = None
+            # Check if any other filaments are already assigned to this printer, unassign them if so
+            existing_filaments = Filament.query.filter_by(assigned_printer_name=name).all()
+            for existing in existing_filaments:
+                if existing.id != f.id:
+                    existing.assigned_printer_name = None
         f.assigned_printer_name = name
 
     db.session.commit()
@@ -901,6 +1208,137 @@ def delete_filament_route(filament_id: int):
     db.session.delete(f)
     db.session.commit()
     return jsonify({"message": "Filament deleted"})
+
+
+@app.get("/filaments/live")
+@token_required
+def get_live_filaments_route():
+    """Get all filament spools with real-time projected remaining weight.
+    ---
+    tags:
+      - Filaments
+    produces:
+      - application/json
+    responses:
+      200:
+        description: >
+          List of filaments augmented with live printer state and projected
+          remaining weight. No database writes are performed.
+        schema:
+          type: object
+          properties:
+            filaments:
+              type: array
+              items:
+                type: object
+    """
+    filaments = Filament.query.all()
+
+    # Build a set of unique printer identifiers (name or IP) that have an
+    # assigned filament so we only poll those printers.
+    assigned_ids = set()
+    for f in filaments:
+        if f.assigned_printer_name:
+            assigned_ids.add(f.assigned_printer_name)
+
+    # Fetch live status for all printers and index by both name and IP so we
+    # can match whichever identifier the filament was saved with.
+    printer_status_by_id: dict = {}
+    if assigned_ids:
+        try:
+            live_printers = scan_network()
+            for p in live_printers:
+                p_ip = p.get("ip")
+                p_name = p.get("name")
+                if p_ip:
+                    printer_status_by_id[p_ip] = p
+                if p_name:
+                    printer_status_by_id[p_name] = p
+        except Exception:
+            pass  # Degrade gracefully — return static DB values
+
+    result = []
+    for f in filaments:
+        filament_dict = f.to_dict()
+
+        if f.assigned_printer_name:
+            printer = printer_status_by_id.get(f.assigned_printer_name)
+            if printer:
+                state = (printer.get("state") or "unknown").lower()
+                progress = float(printer.get("progress") or 0.0)
+                job_filename = printer.get("job_filename")
+
+                filament_dict["printer_state"] = state
+                filament_dict["printer_progress"] = round(progress, 2)
+                filament_dict["printer_ip"] = printer.get("ip")
+                filament_dict["printer_job_filename"] = job_filename
+
+                # Project live remaining weight using layer-based computation
+                # (same logic as /printer/<ip>/print/progress).
+                # This is more accurate than a linear progress interpolation
+                # because each layer has a precisely measured filament weight.
+                if state == "printing" and progress > 0:
+                    try:
+                        clean_fn = (job_filename or "").split("/")[-1]
+                        gcode = (
+                            GCodeFile.query.filter_by(filename=clean_fn).first()
+                            if clean_fn
+                            else None
+                        )
+                        if gcode and gcode.analysis and gcode.analysis.total_weight_g > 0:
+                            layer_stats = gcode.analysis.layer_stats or []
+                            total_layers = len(layer_stats)
+                            p_ip = printer.get("ip")
+                            if total_layers > 0:
+                                # Layer-based: sum weights of completed layers
+                                completed_layers = max(
+                                    0,
+                                    min(
+                                        total_layers - 1,
+                                        round(total_layers * progress / 100.0),
+                                    ),
+                                )
+                                used_g = sum(
+                                    s.get("weight_g", 0.0)
+                                    for s in layer_stats[:completed_layers]
+                                )
+                            else:
+                                # Linear fallback when no layer data
+                                used_g = gcode.analysis.total_weight_g * (progress / 100.0)
+
+                            # Use baseline (spool weight at print start) so we
+                            # don't double-count the incremental deductions.
+                            baseline = get_filament_baseline(p_ip) if p_ip else None
+                            start_weight = (
+                                baseline
+                                if baseline is not None
+                                else f.remaining_weight_g
+                            )
+                            projected = max(0.0, start_weight - used_g)
+                            filament_dict["live_remaining_weight_g"] = round(projected, 2)
+                            filament_dict["current_job_weight_g"] = round(
+                                gcode.analysis.total_weight_g, 2
+                            )
+                        else:
+                            filament_dict["live_remaining_weight_g"] = f.remaining_weight_g
+                    except Exception:
+                        filament_dict["live_remaining_weight_g"] = f.remaining_weight_g
+                else:
+                    filament_dict["live_remaining_weight_g"] = f.remaining_weight_g
+            else:
+                # Printer not reachable / not found — return static DB values
+                filament_dict["printer_state"] = "offline"
+                filament_dict["printer_progress"] = 0.0
+                filament_dict["live_remaining_weight_g"] = f.remaining_weight_g
+        else:
+            filament_dict["printer_state"] = None
+            filament_dict["printer_progress"] = 0.0
+            filament_dict["live_remaining_weight_g"] = f.remaining_weight_g
+
+        result.append(filament_dict)
+
+
+    return jsonify({"filaments": result})
 
 
 @app.post("/queue/items/<int:item_id>/dispatch")
@@ -989,4 +1427,74 @@ def get_activity_route():
     
     logs = query.order_by(ActivityLog.created_at.desc()).limit(limit).all()
     return jsonify([log.to_dict() for log in logs])
+
+
+@app.get("/debug/printer/<ip>/filament")
+@token_required
+def debug_printer_filament(ip: str):
+    """Diagnostic: show in-memory tracking state and DB filament assignment for a printer.
+    ---
+    tags:
+      - System
+    parameters:
+      - name: ip
+        in: path
+        required: true
+        type: string
+        description: Printer IP address
+    responses:
+      200:
+        description: Debug state for the given printer IP
+    """
+    from .activity_logger import (
+        _printer_states, _printer_progress, _printer_filament_baseline
+    )
+
+    # Find assigned filament (name match first, then IP match)
+    printer_data = get_printer_status(ip)
+    printer_name = (printer_data or {}).get("name")
+    filament = None
+    match_method = None
+    if printer_name:
+        filament = Filament.query.filter_by(assigned_printer_name=printer_name).first()
+        if filament:
+            match_method = "printer_name"
+    if filament is None:
+        filament = Filament.query.filter_by(assigned_printer_name=ip).first()
+        if filament:
+            match_method = "printer_ip"
+
+    # Find GCodeFile for the active job
+    job_filename_raw = (printer_data or {}).get("job_filename") or ""
+    job_filename = job_filename_raw.split("/")[-1]
+    gcode = GCodeFile.query.filter_by(filename=job_filename).first() if job_filename else None
+
+    return jsonify({
+        "ip": ip,
+        "printer_name_from_firmware": printer_name,
+        "printer_state_live": (printer_data or {}).get("state"),
+        "printer_progress_live": (printer_data or {}).get("progress"),
+        "job_filename_raw": job_filename_raw,
+        "job_filename_cleaned": job_filename,
+        "tracking": {
+            "state_in_memory": _printer_states.get(ip),
+            "progress_in_memory": _printer_progress.get(ip),
+            "filament_baseline_g": _printer_filament_baseline.get(ip),
+        },
+        "filament_assignment": {
+            "found": filament is not None,
+            "match_method": match_method,
+            "filament_id": filament.id if filament else None,
+            "filament_name": filament.name if filament else None,
+            "assigned_printer_name_in_db": filament.assigned_printer_name if filament else None,
+            "remaining_weight_g": filament.remaining_weight_g if filament else None,
+            "total_weight_g": filament.total_weight_g if filament else None,
+        },
+        "gcode_analysis": {
+            "found": gcode is not None,
+            "has_analysis": gcode is not None and gcode.analysis is not None,
+            "total_weight_g": gcode.analysis.total_weight_g if gcode and gcode.analysis else None,
+            "layer_count": gcode.analysis.layer_count if gcode and gcode.analysis else None,
+        },
+    })
 

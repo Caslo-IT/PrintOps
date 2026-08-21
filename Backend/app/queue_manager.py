@@ -39,7 +39,7 @@ def get_printers_with_availability(mock_printers=None):
         progress = float(p.get("progress") or 0.0)
 
         if ip and state:
-            track_printer_state(ip, state, p.get("name"))
+            track_printer_state(ip, state, p.get("name"), progress=progress, job_filename=p.get("job_filename"))
 
         # Check all active/assigned queue items in DB
         assigned_items = []
@@ -356,12 +356,6 @@ def update_queue_item(item_id, priority=None, status=None, printer_ip=None):
                 item.actual_start_time = datetime.now(timezone.utc)
             elif status == "completed" and not item.actual_completion_time:
                 item.actual_completion_time = datetime.now(timezone.utc)
-                # Deduct filament usage
-                if item.gcode_file and item.gcode_file.analysis:
-                    weight_g = item.gcode_file.analysis.total_weight_g
-                    f = Filament.query.filter_by(assigned_printer_name=item.printer_name).first()
-                    if f and weight_g > 0:
-                        f.remaining_weight_g = max(0.0, f.remaining_weight_g - weight_g)
 
         if printer_ip is not None:
             item.printer_ip = printer_ip if printer_ip.strip() else None

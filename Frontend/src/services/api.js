@@ -49,6 +49,7 @@ export const api = {
   // Printers
   scanPrinters: () => request('/printers'),
   getPrinterStatus: (ip) => request(`/printer/${ip}`),
+  getPrinterPrintProgress: (ip) => request(`/printer/${ip}/print/progress`),
   getPrinterFiles: (ip) => request(`/printer/${ip}/files`),
   uploadPrinterFile: (ip, file) => {
     const formData = new FormData()
@@ -157,6 +158,7 @@ export const api = {
 
   // Filaments
   getFilaments: () => request('/filaments'),
+  getLiveFilaments: () => request('/filaments/live'),
   createFilament: (filamentData) =>
     request('/filaments', {
       method: 'POST',
