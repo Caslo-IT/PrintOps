@@ -124,6 +124,7 @@ class PrintQueueItem(db.Model):
     printer_file_path = db.Column(db.Text, nullable=True)
     filename = db.Column(db.Text, nullable=True)
     printer_ip = db.Column(db.Text, nullable=True)
+    printer_name = db.Column(db.Text, nullable=True)
     priority = db.Column(db.Integer, nullable=False, default=1)
     status = db.Column(db.String(50), nullable=False, default="queued")
     estimated_duration_sec = db.Column(db.Float, nullable=False, default=0.0)
@@ -167,6 +168,7 @@ class PrintQueueItem(db.Model):
             "printer_file_path": self.printer_file_path,
             "filename": self.filename,
             "printer_ip": self.printer_ip,
+            "printer_name": self.printer_name,
             "priority": self.priority,
             "status": self.status,
             "estimated_duration_sec": round(self.estimated_duration_sec, 2),
@@ -270,7 +272,7 @@ class Filament(db.Model):
     color = db.Column(db.String(50), nullable=False, default="Black")
     total_weight_g = db.Column(db.Float, nullable=False, default=1000.0)
     remaining_weight_g = db.Column(db.Float, nullable=False, default=1000.0)
-    assigned_printer_ip = db.Column(db.Text, nullable=True)
+    assigned_printer_name = db.Column(db.Text, nullable=True)
     created_at = db.Column(
         db.DateTime(timezone=True),
         nullable=False,
@@ -286,6 +288,6 @@ class Filament(db.Model):
             "color": self.color,
             "total_weight_g": self.total_weight_g,
             "remaining_weight_g": self.remaining_weight_g,
-            "assigned_printer_ip": self.assigned_printer_ip,
+            "assigned_printer_name": self.assigned_printer_name,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

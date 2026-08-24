@@ -7,6 +7,7 @@ import { MetricCard } from './components/dashboard/MetricCard'
 import { PrinterDetail } from './components/dashboard/PrinterDetail'
 import { PrinterList } from './components/dashboard/PrinterList'
 import { PrintersWorkspace } from './components/dashboard/PrintersWorkspace'
+import { PrinterMonitorWorkspace } from './components/dashboard/PrinterMonitorWorkspace'
 import { GCodeStorageWorkspace } from './components/storage/GCodeStorageWorkspace'
 import { QueueWorkspace } from './components/queue/QueueWorkspace'
 import { ActivityLogWorkspace } from './components/activity/ActivityLogWorkspace'
@@ -24,6 +25,7 @@ function App() {
   const { isAuthenticated, logout } = useAuth()
   
   const [printers, setPrinters] = useState([])
+  const [liveFilaments, setLiveFilaments] = useState([])
   const [selected, setSelected] = useState(null)
   const [query, setQuery] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -49,9 +51,13 @@ function App() {
     const isAutoRefresh = isBackground === true
     if (!isAutoRefresh) setScanning(true)
     try {
-      const data = await api.scanPrinters()
+      const [data, filamentData] = await Promise.all([
+        api.scanPrinters(),
+        api.getLiveFilaments().catch(() => ({ filaments: [] })),
+      ])
       const result = Array.isArray(data.printers) ? data.printers.map(normalizePrinter) : []
       setPrinters(result)
+      setLiveFilaments(Array.isArray(filamentData.filaments) ? filamentData.filaments : [])
       setSelected((current) => result.find((printer) => printer.ip === current?.ip) || result[0] || null)
       setApiError('')
     } catch (err) {
@@ -206,6 +212,14 @@ function App() {
               onScan={scan}
               lastUpdated={lastUpdated}
               onNotify={notify}
+            />
+          ) : activeView === 'monitor' ? (
+            <PrinterMonitorWorkspace
+              printers={printers}
+              filaments={liveFilaments}
+              scanning={scanning}
+              onScan={scan}
+              lastUpdated={lastUpdated}
             />
           ) : activeView === 'storage' ? (
             <GCodeStorageWorkspace onNotify={notify} onNavigateToQueue={() => setActiveView('queue')} />

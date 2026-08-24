@@ -70,7 +70,7 @@ class TestPrintQueueManager(unittest.TestCase):
             color="Black",
             total_weight_g=1000.0,
             remaining_weight_g=1000.0,
-            assigned_printer_ip="192.168.1.10"
+            assigned_printer_name="Test Printer 1"
         )
         
         self.filament2 = Filament(
@@ -79,7 +79,7 @@ class TestPrintQueueManager(unittest.TestCase):
             color="White",
             total_weight_g=1000.0,
             remaining_weight_g=1000.0,
-            assigned_printer_ip="192.168.1.11"
+            assigned_printer_name="Test Printer 2"
         )
 
         db.session.add_all([self.file1, self.analysis1, self.file2, self.analysis2, self.filament1, self.filament2])
@@ -88,12 +88,14 @@ class TestPrintQueueManager(unittest.TestCase):
         self.mock_printers = [
             {
                 "ip": "192.168.1.10",
+                "name": "Test Printer 1",
                 "online": True,
                 "state": "idle",
                 "progress": 0,
             },
             {
                 "ip": "192.168.1.11",
+                "name": "Test Printer 2",
                 "online": True,
                 "state": "printing",
                 "progress": 50,  # 50% through a job

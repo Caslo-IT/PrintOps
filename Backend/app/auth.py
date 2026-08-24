@@ -33,10 +33,13 @@ def generate_token(user_id: int, username: str, role: str) -> str:
 def get_current_user():
     """Extract user information from the current request's JWT."""
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if not auth_header:
         return None
 
-    token = auth_header.split(" ")[1]
+    if auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1]
+    else:
+        token = auth_header
     try:
         data = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
         return User.query.get(data["user_id"])

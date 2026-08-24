@@ -8,7 +8,7 @@ from urllib.parse import quote, urlsplit
 import requests
 import websockets
 
-from .config import CREALITY_PORT, MOONRAKER_PORT
+from .config import CREALITY_PORT, CREALITY_UPLOAD_TIMEOUT, MOONRAKER_PORT
 
 
 CREALITY_STATES = {
@@ -92,6 +92,24 @@ async def get_creality_status(ip):
 
         state_code = field(status_message, "state", "machineStatus", default=None)
         state_name, state_detail = describe_creality_state(state_code)
+        print_progress = field(status_message, "printProgress", "progress", default=0)
+        current_layer = field(status_message, "layer", "currentLayer", "current_layer", default=None)
+        job_filename = field(
+            status_message, "printFileName", "printJobName", "printFile", "file", default=None
+        )
+        feed_state = field(status_message, "feedState", default=None)
+
+        # K1 Max firmware reports state=1 while an active job is running. Its
+        # feedState/layer/job fields distinguish this from preheating, and are
+        # the reliable signal for live filament tracking.
+        if (
+            job_filename
+            and (feed_state == 3 or (current_layer not in (None, 0) and float(print_progress or 0) > 0))
+            and state_name in {"idle", "preparing", "unknown"}
+        ):
+            state_name = "printing"
+            state_detail = "Printer is currently printing."
+
         return {
             "ip": ip,
             "online": True,
@@ -99,7 +117,10 @@ async def get_creality_status(ip):
             "state": state_name,
             "state_code": state_code,
             "state_detail": state_detail,
-            "progress": field(status_message, "printProgress", "progress", default=0),
+            "progress": print_progress,
+            "current_layer": current_layer,
+            "total_layers": field(status_message, "TotalLayer", "totalLayer", "total_layers", default=None),
+            "job_filename": job_filename,
             "nozzle": field(status_message, "nozzleTemp", "temperature", default=0),
             "bed": field(status_message, "bedTemp", default=0),
             "name": field(status_message, "hostname", default=None) or field(status_message, "model", default=None),
@@ -211,7 +232,8 @@ def get_moonraker_status(ip):
             "online": True,
             "protocol": "moonraker",
             "state": status.get("print_stats", {}).get("state", "unknown"),
-            "progress": status.get("virtual_sdcard", {}).get("progress", 0),
+            "progress": status.get("virtual_sdcard", {}).get("progress", 0) * 100.0,
+            "job_filename": status.get("print_stats", {}).get("filename", None),
             "nozzle": status.get("extruder", {}).get("temperature", 0),
             "bed": status.get("heater_bed", {}).get("temperature", 0),
             "name": response.json().get("result", {}).get("status", {}).get("mcu", {}).get("mcu_name") or None,
@@ -266,7 +288,7 @@ def upload_creality_file(ip, filename, content, content_type="application/octet-
         response = requests.post(
             f"http://{printer_host}:80/upload/{quote(filename)}",
             files={"file": (filename, content, content_type)},
-            timeout=30,
+            timeout=CREALITY_UPLOAD_TIMEOUT,
         )
         response.raise_for_status()
         try:

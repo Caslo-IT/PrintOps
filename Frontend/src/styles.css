@@ -27,5 +27,24 @@ button { cursor: pointer; font: inherit; }
 .printer-icon { display: grid; height: 42px; width: 42px; flex-shrink: 0; place-items: center; border-radius: 12px; } .printer-icon.orange { background: #fff0e5; color: #f97316; } .printer-icon.blue { background: #eaf3ff; color: #3984ee; } .printer-icon.purple { background: #f1eaff; color: #8b5cf6; } .printer-icon.green { background: #e8f8ef; color: #19a365; }
 .status { display: inline-flex; align-items: center; gap: 5px; border-radius: 99px; padding: 4px 7px; font-size: 10px; font-weight: 700; white-space: nowrap; } .status i, .live-dot { height: 6px; width: 6px; border-radius: 50%; background: currentColor; } .status.printing, .status.preparing { color: #e86f19; background: #fff2e9; } .status.idle { color: #14965b; background: #eaf9f1; } .status.paused { color: #a26900; background: #fff8df; } .status.completed { color: #3984ee; background: #edf5ff; } .status.offline { color: #94a3b8; background: #f1f5f9; } .status.error { color: #dc2626; background: #fff0f0; }
 .progress { height: 5px; overflow: hidden; border-radius: 99px; background: #f1f5f9; } .progress span { display: block; height: 100%; border-radius: inherit; background: #f97316; }
+.filament-progress span { background: #16a365; }
+.monitor-panel { overflow-x: auto; border: 1px solid #e8ebef; border-radius: 16px; background: white; padding: 14px; box-shadow: 0 2px 8px #17203305; }
+.monitor-grid { display: grid; min-width: 880px; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+.monitor-tile { min-width: 0; border: 1px solid #e8ebef; border-radius: 11px; background: #fff; padding: 12px; transition: .15s; }
+.monitor-tile:hover { border-color: #fdba8c; box-shadow: 0 4px 14px #1720330d; }
+.monitor-printer-icon { display: grid; height: 28px; width: 28px; flex: 0 0 auto; place-items: center; border-radius: 8px; }
+.monitor-printer-icon.orange { background: #fff0e5; color: #f97316; } .monitor-printer-icon.blue { background: #eaf3ff; color: #3984ee; } .monitor-printer-icon.purple { background: #f1eaff; color: #8b5cf6; } .monitor-printer-icon.green { background: #e8f8ef; color: #19a365; }
+.monitor-values { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.monitor-values dt { font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; }
+.monitor-values dd { margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; color: #334155; }
+.monitor-actions { position: relative; display: flex; flex-wrap: wrap; gap: 8px; }
+.monitor-notification-popover { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; width: min(390px, calc(100vw - 40px)); overflow: hidden; border: 1px solid #e2e8f0; border-radius: 14px; background: white; box-shadow: 0 18px 45px #17203322; }
+.monitor-notification-count { display: grid; min-width: 18px; height: 18px; place-items: center; border-radius: 99px; background: #f97316; padding: 0 5px; color: white; font-size: 10px; }
+.monitor-clear-button { border: 0; background: transparent; color: #ea580c; font-size: 11px; font-weight: 700; } .monitor-clear-button:hover { color: #c2410c; }
+.monitor-notification-list { max-height: 360px; overflow-y: auto; }
+.monitor-notification-item { display: flex; align-items: center; gap: 10px; min-width: 0; border-bottom: 1px solid #f1f5f9; padding: 12px 14px; }
+.monitor-notification-item:last-child { border-bottom: 0; } .monitor-notification-item:hover { background: #fffaf7; }
+.monitor-notification-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 8px; }
+.monitor-notification-icon.error { background: #fff0f0; color: #dc2626; } .monitor-notification-icon.complete { background: #eaf9f1; color: #14965b; } .monitor-notification-icon.start { background: #fff2e9; color: #e86f19; } .monitor-notification-icon.filament { background: #fff8df; color: #a26900; } .monitor-notification-icon.info { background: #edf5ff; color: #3984ee; }
 .avatar { display: grid; height: 32px; width: 32px; place-items: center; border-radius: 50%; background: #172033; color: white; font-size: 10px; font-weight: 800; } .notification-dot { position: absolute; right: 8px; top: 7px; height: 5px; width: 5px; border: 1px solid white; border-radius: 50%; background: #f97316; }
 .live-dot { display: block; color: #4ade80; box-shadow: 0 0 0 4px #4ade8025; } .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
