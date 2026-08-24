@@ -1,6 +1,7 @@
 """Flask application and HTTP routes."""
 
 from pathlib import Path
+from math import pi
 
 from flask import Flask, jsonify, request, send_file
 from flasgger import Swagger
@@ -30,7 +31,7 @@ from .queue_manager import (
     update_queue_item,
 )
 from .activity_logger import log_activity, track_printer_state, get_filament_baseline, set_filament_baseline
-from .models import ActivityLog, GCodeFile, PrintHistory, Filament
+from .models import ActivityLog, GCodeFile, PrintHistory, Filament, PrintQueueItem
 from .services import get_printer_files, get_printer_status, scan_network
 
 
@@ -345,15 +346,17 @@ def printer_print_progress(ip: str):
 
     state = (printer_data.get("state") or "unknown").lower()
     progress = float(printer_data.get("progress") or 0.0)
+    current_layer = _printer_current_layer(printer_data)
     job_filename_raw = printer_data.get("job_filename") or ""
     job_filename = job_filename_raw.split("/")[-1]  # strip any path prefix
 
-    # Trigger state tracking so the activity logger / filament deduction runs
+    # Trigger state tracking so the activity logger can retain the spool's
+    # print-start baseline for layer-based balance updates.
     track_printer_state(ip, state, printer_data.get("name"), progress=progress,
                         job_filename=job_filename_raw)
 
     # 2. Look up the G-code analysis for the current job
-    gcode = GCodeFile.query.filter_by(filename=job_filename).first() if job_filename else None
+    gcode = _active_gcode_for_printer(ip, job_filename_raw)
     analysis = gcode.analysis if gcode else None
 
     # ── Filament block ────────────────────────────────────────────────────────
@@ -387,6 +390,7 @@ def printer_print_progress(ip: str):
     completed_layers_count = 0
     layer_stats_for_block: list = []
     gcode_found = analysis is not None
+    layer_source = "no-layer-stats"
 
     if analysis and analysis.total_weight_g > 0:
         total_job_weight_g = analysis.total_weight_g
@@ -394,13 +398,13 @@ def printer_print_progress(ip: str):
         layer_stats_for_block = analysis.layer_stats or []
         total_layers = len(layer_stats_for_block)
 
-        if total_layers > 0 and progress > 0:
-            completed_layers_count = max(
-                0, min(total_layers - 1, round(total_layers * progress / 100.0))
+        if total_layers > 0:
+            completed_layers_count, layer_source = _completed_layer_count(
+                layer_stats_for_block, current_layer, state, progress
             )
-            for stat in layer_stats_for_block[:completed_layers_count]:
-                used_weight_g += stat.get("weight_g", 0.0)
-                used_filament_mm += stat.get("filament_mm", 0.0)
+            used_filament_mm, used_weight_g = _used_layer_material(
+                layer_stats_for_block, completed_layers_count, analysis
+            )
         else:
             # Linear interpolation fallback
             used_weight_g = total_job_weight_g * (progress / 100.0)
@@ -413,7 +417,7 @@ def printer_print_progress(ip: str):
     spool_remaining_g = None
     deduction_method = "none"
 
-    if filament_spool and state in ("printing", "completed") and progress > 0:
+    if filament_spool and state in ("printing", "completed") and (progress > 0 or current_layer is not None):
         if baseline is None:
             # Baseline missing: reconstruct from current DB value + used_weight_g.
             # If incremental deductions already ran, current remaining is lower
@@ -432,8 +436,9 @@ def printer_print_progress(ip: str):
             deduction_method = "snapshot-baseline"
 
         if gcode_found and total_job_weight_g > 0:
-            # Accurate: use layer-based (or linear-fallback) used_weight_g
+            # Accurate: use the printer's current layer and stored per-layer use.
             accurate_remaining = max(0.0, baseline - used_weight_g)
+            deduction_method += f"+{layer_source}"
         else:
             # No GCode analysis: fall back to simple linear deduction from baseline
             accurate_remaining = max(
@@ -469,9 +474,10 @@ def printer_print_progress(ip: str):
     layer_stats_full = analysis.layer_stats if analysis else []
     total_layers = len(layer_stats_full)
     completed_layers = 0
-    if total_layers > 0 and progress > 0:
-        completed_layers = max(0, min(total_layers - 1,
-                                      round(total_layers * progress / 100.0)))
+    if total_layers > 0:
+        completed_layers, _ = _completed_layer_count(
+            layer_stats_full, current_layer, state, progress
+        )
 
     # Annotate each layer with a running cumulative weight
     annotated_layers = []
@@ -497,6 +503,7 @@ def printer_print_progress(ip: str):
         "ip": ip,
         "state": state,
         "progress": round(progress, 2),
+        "current_layer": current_layer,
         "job_filename": job_filename or None,
         "nozzle_temp": printer_data.get("nozzle"),
         "bed_temp": printer_data.get("bed"),
@@ -547,6 +554,84 @@ def printer_files(ip: str):
 
 def _storage_error_response(error: StorageError):
     return jsonify({"error": error.message}), error.status_code
+
+
+def _printer_current_layer(printer: dict):
+    """Return the active layer reported by firmware, or None when unavailable."""
+    details = printer.get("details") or {}
+    for value in (
+        printer.get("current_layer"),
+        details.get("layer"),
+        details.get("currentLayer"),
+        details.get("current_layer"),
+    ):
+        try:
+            layer = int(float(value))
+            if layer >= 0:
+                return layer
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _completed_layer_count(layer_stats, current_layer, state, progress):
+    """Count fully printed layers, preferring the layer value reported by firmware."""
+    total_layers = len(layer_stats)
+    if not total_layers:
+        return 0, "no-layer-stats"
+    if state == "completed":
+        return total_layers, "completed-job"
+    if current_layer is not None:
+        # Firmware reports the layer currently being printed. Count only prior,
+        # completed layers so the partial active layer is never overcharged.
+        return max(0, min(total_layers, current_layer - 1)), "printer-layer"
+    return max(0, min(total_layers, round(total_layers * progress / 100.0))), "progress-fallback"
+
+
+def _layer_weight_g(layer_stat, analysis):
+    """Use a saved layer weight, reconstructing tiny rounded layers from length."""
+    try:
+        weight = float(layer_stat.get("weight_g"))
+    except (TypeError, ValueError):
+        weight = None
+
+    filament_mm = float(layer_stat.get("filament_mm") or 0)
+    if weight is None or (weight == 0 and filament_mm != 0):
+        diameter_mm = float(analysis.filament_diameter_mm or 1.75)
+        density = float(analysis.filament_density_g_cm3 or 1.10)
+        radius_cm = (diameter_mm / 2) / 10
+        weight = (filament_mm / 10) * pi * (radius_cm ** 2) * density
+    return weight or 0.0
+
+
+def _used_layer_material(layer_stats, completed_layers, analysis):
+    """Return cumulative length and weight from the saved local layer records."""
+    completed_stats = layer_stats[:completed_layers]
+    return (
+        sum(float(stat.get("filament_mm") or 0) for stat in completed_stats),
+        sum(_layer_weight_g(stat, analysis) for stat in completed_stats),
+    )
+
+
+def _active_gcode_for_printer(printer_ip, job_filename):
+    """Find the local G-code analysis for a live job, including queue fallback."""
+    clean_filename = (job_filename or "").split("/")[-1]
+    if clean_filename:
+        gcode = GCodeFile.query.filter_by(filename=clean_filename).first()
+        if gcode:
+            return gcode
+
+    # A printer may abbreviate or alter the filename it reports. The queue
+    # retains the exact local G-code record that was uploaded to that printer.
+    if printer_ip:
+        queue_item = (
+            PrintQueueItem.query.filter_by(printer_ip=printer_ip, status="printing")
+            .order_by(PrintQueueItem.updated_at.desc())
+            .first()
+        )
+        if queue_item and queue_item.gcode_file:
+            return queue_item.gcode_file
+    return None
 
 
 @app.post("/gcode/folders")
@@ -1222,8 +1307,8 @@ def get_live_filaments_route():
     responses:
       200:
         description: >
-          List of filaments augmented with live printer state and projected
-          remaining weight. No database writes are performed.
+          List of filaments augmented with live printer state and layer-based
+          remaining weight. Active spool balances are updated from completed layers.
         schema:
           type: object
           properties:
@@ -1266,59 +1351,60 @@ def get_live_filaments_route():
             if printer:
                 state = (printer.get("state") or "unknown").lower()
                 progress = float(printer.get("progress") or 0.0)
+                current_layer = _printer_current_layer(printer)
                 job_filename = printer.get("job_filename")
 
                 filament_dict["printer_state"] = state
                 filament_dict["printer_progress"] = round(progress, 2)
                 filament_dict["printer_ip"] = printer.get("ip")
+                filament_dict["printer_current_layer"] = current_layer
                 filament_dict["printer_job_filename"] = job_filename
 
-                # Project live remaining weight using layer-based computation
-                # (same logic as /printer/<ip>/print/progress).
-                # This is more accurate than a linear progress interpolation
-                # because each layer has a precisely measured filament weight.
-                if state == "printing" and progress > 0:
+                # Update the spool from the actual layer reported by the printer.
+                # Each stored G-code analysis contains the filament weight for
+                # every layer, so this never estimates usage from percentage.
+                if state in ("printing", "completed"):
                     try:
-                        clean_fn = (job_filename or "").split("/")[-1]
-                        gcode = (
-                            GCodeFile.query.filter_by(filename=clean_fn).first()
-                            if clean_fn
-                            else None
-                        )
-                        if gcode and gcode.analysis and gcode.analysis.total_weight_g > 0:
+                        gcode = _active_gcode_for_printer(printer.get("ip"), job_filename)
+                        if (
+                            gcode
+                            and gcode.analysis
+                            and gcode.analysis.total_weight_g > 0
+                            and gcode.analysis.layer_stats
+                        ):
                             layer_stats = gcode.analysis.layer_stats or []
-                            total_layers = len(layer_stats)
                             p_ip = printer.get("ip")
-                            if total_layers > 0:
-                                # Layer-based: sum weights of completed layers
-                                completed_layers = max(
-                                    0,
-                                    min(
-                                        total_layers - 1,
-                                        round(total_layers * progress / 100.0),
-                                    ),
-                                )
-                                used_g = sum(
-                                    s.get("weight_g", 0.0)
-                                    for s in layer_stats[:completed_layers]
-                                )
-                            else:
-                                # Linear fallback when no layer data
-                                used_g = gcode.analysis.total_weight_g * (progress / 100.0)
+                            completed_layers, layer_source = _completed_layer_count(
+                                layer_stats, current_layer, state, progress
+                            )
+                            _, used_g = _used_layer_material(
+                                layer_stats, completed_layers, gcode.analysis
+                            )
 
-                            # Use baseline (spool weight at print start) so we
-                            # don't double-count the incremental deductions.
+                            # Keep a print-start baseline so repeated polling
+                            # overwrites the balance instead of double-deducting.
                             baseline = get_filament_baseline(p_ip) if p_ip else None
+                            if baseline is None:
+                                baseline = min(
+                                    f.total_weight_g,
+                                    f.remaining_weight_g + used_g,
+                                )
+                                if p_ip:
+                                    set_filament_baseline(p_ip, baseline)
                             start_weight = (
                                 baseline
                                 if baseline is not None
                                 else f.remaining_weight_g
                             )
                             projected = max(0.0, start_weight - used_g)
+                            f.remaining_weight_g = projected
+                            db.session.commit()
                             filament_dict["live_remaining_weight_g"] = round(projected, 2)
                             filament_dict["current_job_weight_g"] = round(
                                 gcode.analysis.total_weight_g, 2
                             )
+                            filament_dict["completed_layers"] = completed_layers
+                            filament_dict["filament_calculation"] = layer_source
                         else:
                             filament_dict["live_remaining_weight_g"] = f.remaining_weight_g
                     except Exception:
@@ -1497,4 +1583,3 @@ def debug_printer_filament(ip: str):
             "layer_count": gcode.analysis.layer_count if gcode and gcode.analysis else None,
         },
     })
-

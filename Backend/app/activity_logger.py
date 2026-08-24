@@ -31,7 +31,6 @@ def log_activity(printer_ip, event_type, message, details=None, printer_name=Non
         # Optionally log to stdout if DB fails
 
 _printer_states = {}
-_printer_progress = {}
 # Stores the filament spool remaining_weight_g at the moment a print starts.
 # Used by /printer/<ip>/print/progress to compute accurate layer-based deduction
 # without double-counting the incremental delta deductions.
@@ -58,53 +57,6 @@ def track_printer_state(ip, state_name, printer_name=None, progress=0.0, job_fil
     if not ip or not state_name:
         return
     
-    # Real-time filament deduction
-    if state_name in ["printing", "completed"]:
-        last_prog = _printer_progress.get(ip, 0.0)
-
-        # Enforce 100% on completion if firmware didn't report it
-        if state_name == "completed" and progress > 0 and progress < 100.0:
-            progress = 100.0
-
-        if progress > last_prog:
-            delta_prog = progress - last_prog
-            _printer_progress[ip] = progress
-
-            if job_filename and delta_prog > 0:
-                try:
-                    from .models import Filament, GCodeFile
-
-                    # Try matching by printer name first, then fall back to IP.
-                    # The UI may store either the firmware name or the IP as
-                    # assigned_printer_name depending on what was available at
-                    # assignment time.
-                    filament = None
-                    if printer_name:
-                        filament = Filament.query.filter_by(
-                            assigned_printer_name=printer_name
-                        ).first()
-                    if filament is None:
-                        # Fallback: user stored the IP as the assigned name
-                        filament = Filament.query.filter_by(
-                            assigned_printer_name=ip
-                        ).first()
-
-                    if filament:
-                        clean_filename = job_filename.split("/")[-1]
-                        gcode = GCodeFile.query.filter_by(filename=clean_filename).first()
-                        if gcode and gcode.analysis and gcode.analysis.total_weight_g > 0:
-                            deduction = gcode.analysis.total_weight_g * (delta_prog / 100.0)
-                            filament.remaining_weight_g = max(
-                                0.0, filament.remaining_weight_g - deduction
-                            )
-                            db.session.commit()
-                except SQLAlchemyError:
-                    db.session.rollback()
-
-        elif progress < last_prog and state_name != "completed":
-            # New print started on this printer — reset progress tracking
-            _printer_progress[ip] = progress
-            
     prev_state = _printer_states.get(ip)
     if prev_state != state_name:
         _printer_states[ip] = state_name
@@ -141,7 +93,7 @@ def track_printer_state(ip, state_name, printer_name=None, progress=0.0, job_fil
                         fl = Filament.query.filter_by(
                             assigned_printer_name=ip
                         ).first()
-                    if fl:
+                    if fl and ip not in _printer_filament_baseline:
                         _printer_filament_baseline[ip] = fl.remaining_weight_g
                 except Exception:
                     pass

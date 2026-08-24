@@ -1,5 +1,5 @@
 import React from 'react'
-import { Activity, Boxes, CircleHelp, HardDrive, LayoutDashboard, Printer, Settings, LogOut, History, Disc } from 'lucide-react'
+import { Activity, Boxes, CircleHelp, HardDrive, LayoutDashboard, Printer, Settings, LogOut, History, Disc, Monitor } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 
 export function Sidebar({ printerCount, queueCount, storageCount, activeView, onNavigate, mobileOpen, desktopOpen, onClose }) {
@@ -24,6 +24,12 @@ export function Sidebar({ printerCount, queueCount, storageCount, activeView, on
         </div>
         <nav className="flex-1 px-4 py-7">
           <div className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-400">Workspace</div>
+          <NavItem
+            icon={<Monitor size={17} />}
+            label="Monitor"
+            active={activeView === 'monitor'}
+            onClick={() => onNavigate('monitor')}
+          />
           <NavItem
             icon={<LayoutDashboard size={17} />}
             label="Overview"

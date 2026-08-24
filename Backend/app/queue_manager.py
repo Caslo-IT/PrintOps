@@ -440,7 +440,8 @@ def dispatch_queue_item(item_id, mock_printers=None):
         upload_res = upload_printer_file(item.printer_ip, filename, file_bytes)
         if upload_res is None and mock_printers is None:
             raise StorageError(
-                f"Failed to upload G-code to printer at {item.printer_ip}"
+                f"Failed to upload '{filename}' to printer at {item.printer_ip}. "
+                "Check that the printer is online and allow the upload to finish."
             )
 
         remote_path = f"/usr/data/printer_data/gcodes/{filename}"
