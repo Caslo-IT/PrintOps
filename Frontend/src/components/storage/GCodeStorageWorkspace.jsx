@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Calendar, Clock, Download, FileText, FolderPlus, Layers, Plus, RefreshCw, Trash2, Upload, Zap } from 'lucide-react'
+import { Calendar, Clock, Download, FileText, Folder, FolderPlus, Layers, Plus, RefreshCw, Trash2, Upload, Zap } from 'lucide-react'
 import { formatDuration, formatTemperature } from '../../data/printers'
 import { api } from '../../services/api'
 import { ConfirmModal } from '../common/ConfirmModal'
@@ -18,6 +18,7 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
   const [loading, setLoading] = useState(!hasCachedStorageData)
   const [selectedFolder, setSelectedFolder] = useState(cachedSelectedFolder)
   const [selectedSize, setSelectedSize] = useState(cachedSelectedSize)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const [createFolderModalOpen, setCreateFolderModalOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -144,6 +145,100 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
     }
   }
 
+  const normalizedSearch = searchQuery.trim().toLowerCase()
+  const visibleFiles = normalizedSearch
+    ? files.filter((file) => [file.filename, file.folder, file.size]
+      .some((value) => String(value || '').toLowerCase().includes(normalizedSearch)))
+    : files
+
+  const filesByFolder = visibleFiles.reduce((groups, file) => {
+    const folder = file.folder || 'Unfiled G-code'
+    const size = file.size || 'Uncategorized'
+    if (!groups[folder]) groups[folder] = {}
+    if (!groups[folder][size]) groups[folder][size] = []
+    groups[folder][size].push(file)
+    return groups
+  }, {})
+
+  const renderFileCard = (file) => {
+    const analysis = file.analysis || {}
+    return (
+      <div key={file.id} className="panel flex flex-col justify-between p-5 transition-shadow hover:shadow-md">
+        <div>
+          <div className="flex items-start justify-between gap-3">
+            <span className="rounded-md bg-orange-50 px-2 py-1 text-[11px] font-bold text-orange-600">
+              {file.size}
+            </span>
+            <button
+              onClick={() => handleDelete(file.id, file.filename)}
+              className="text-slate-300 hover:text-red-600"
+              title="Delete file"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
+
+          <h3 className="mt-3 truncate text-sm font-bold text-slate-900" title={file.filename}>
+            {file.filename}
+          </h3>
+          <p className="mt-1 text-[11px] font-mono text-slate-400">
+            ID #{file.id} · {file.file_size_bytes ? `${(file.file_size_bytes / 1024 / 1024).toFixed(2)} MB` : 'Local file'}
+          </p>
+
+          <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-xs">
+            <div>
+              <span className="text-[10px] text-slate-400">Est. Duration</span>
+              <p className="font-bold text-slate-800 flex items-center gap-1 mt-0.5">
+                <Clock size={12} className="text-orange-500" />
+                {formatDuration(analysis.total_time_sec)}
+              </p>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-400">Total Layers</span>
+              <p className="font-bold text-slate-800 flex items-center gap-1 mt-0.5">
+                <Layers size={12} className="text-blue-500" />
+                {analysis.layer_count ? `${analysis.layer_count} layers` : '—'}
+              </p>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-400">Filament Used</span>
+              <p className="font-bold text-slate-800 mt-0.5">
+                {analysis.total_filament_m ? `${analysis.total_filament_m}m (${analysis.total_weight_g || 0}g)` : '—'}
+              </p>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-400">Filament Spec</span>
+              <p className="font-bold text-slate-800 mt-0.5">1.75mm · 1.10g/cm³</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-2 border-t border-slate-100 pt-4">
+          <a
+            href={api.getGCodeDownloadUrl(file.id)}
+            target="_blank"
+            rel="noreferrer"
+            className="secondary-button flex-1 text-xs"
+            title="Download G-code"
+          >
+            <Download size={13} />
+            Download
+          </a>
+          <button
+            onClick={() => {
+              setScheduleModalItem(file)
+              setSchedulePriority(1)
+            }}
+            className="primary-button text-xs"
+          >
+            <Zap size={13} />
+            Schedule
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       {/* Header */}
@@ -197,6 +292,17 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-500">Search:</span>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="File or folder name"
+              className="w-44 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 outline-none placeholder:text-slate-400 focus:border-orange-500"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-slate-500">Size:</span>
             <select
               value={selectedSize}
@@ -216,7 +322,7 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
             <button onClick={loadData} disabled={loading} className="icon-button" title="Refresh files">
               <RefreshCw size={15} className={loading ? 'spin' : ''} />
             </button>
-            <span className="text-xs font-semibold text-slate-400">{files.length} G-code file(s) found</span>
+            <span className="text-xs font-semibold text-slate-400">{visibleFiles.length} G-code file(s) found</span>
           </div>
         </div>
       </div>
@@ -224,96 +330,59 @@ export function GCodeStorageWorkspace({ onNotify, onNavigateToQueue }) {
       {/* Files List / Grid */}
       {loading ? (
         <div className="panel p-12 text-center text-sm text-slate-400">Loading stored G-code files...</div>
-      ) : files.length === 0 ? (
+      ) : visibleFiles.length === 0 ? (
         <div className="panel p-12 text-center text-sm text-slate-500">
           <FileText size={32} className="mx-auto mb-3 text-slate-300" />
           <p className="font-bold text-slate-700">No G-code files found</p>
-          <p className="mt-1 text-xs text-slate-400">Upload G-code files into structured folders to parse print metrics.</p>
+          <p className="mt-1 text-xs text-slate-400">{normalizedSearch ? 'Try a different file, folder, or size search.' : 'Upload G-code files into structured folders to parse print metrics.'}</p>
         </div>
       ) : (
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          {files.map((file) => {
-            const analysis = file.analysis || {}
+        <div className="space-y-7">
+          {Object.entries(filesByFolder).map(([folder, filesBySize]) => {
+            const folderFileCount = Object.values(filesBySize).reduce(
+              (count, sizeFiles) => count + sizeFiles.length,
+              0,
+            )
+            const sortedSizeFolders = Object.entries(filesBySize).sort(
+              ([firstSize], [secondSize]) => {
+                const firstIndex = SIZE_OPTIONS.indexOf(firstSize)
+                const secondIndex = SIZE_OPTIONS.indexOf(secondSize)
+                return (firstIndex === -1 ? SIZE_OPTIONS.length : firstIndex) -
+                  (secondIndex === -1 ? SIZE_OPTIONS.length : secondIndex)
+              },
+            )
+
             return (
-              <div key={file.id} className="panel flex flex-col justify-between p-5 transition-shadow hover:shadow-md">
-                <div>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-md bg-orange-50 px-2 py-1 text-[11px] font-bold text-orange-600">
-                        {file.size}
-                      </span>
-                      <span className="truncate text-xs font-medium text-slate-500">{file.folder}</span>
-                    </div>
-                    <button
-                      onClick={() => handleDelete(file.id, file.filename)}
-                      className="text-slate-300 hover:text-red-600"
-                      title="Delete file"
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-
-                  <h3 className="mt-3 truncate text-sm font-bold text-slate-900" title={file.filename}>
-                    {file.filename}
-                  </h3>
-                  <p className="mt-1 text-[11px] font-mono text-slate-400">
-                    ID #{file.id} · {file.file_size_bytes ? `${(file.file_size_bytes / 1024 / 1024).toFixed(2)} MB` : 'Local file'}
-                  </p>
-
-                  {/* Parsed Analysis Data */}
-                  <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-xs">
-                    <div>
-                      <span className="text-[10px] text-slate-400">Est. Duration</span>
-                      <p className="font-bold text-slate-800 flex items-center gap-1 mt-0.5">
-                        <Clock size={12} className="text-orange-500" />
-                        {formatDuration(analysis.total_time_sec)}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400">Total Layers</span>
-                      <p className="font-bold text-slate-800 flex items-center gap-1 mt-0.5">
-                        <Layers size={12} className="text-blue-500" />
-                        {analysis.layer_count ? `${analysis.layer_count} layers` : '—'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400">Filament Used</span>
-                      <p className="font-bold text-slate-800 mt-0.5">
-                        {analysis.total_filament_m ? `${analysis.total_filament_m}m (${analysis.total_weight_g || 0}g)` : '—'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400">Filament Spec</span>
-                      <p className="font-bold text-slate-800 mt-0.5">
-                        1.75mm · 1.10g/cm³
-                      </p>
-                    </div>
-                  </div>
+            <section key={folder} className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 sm:p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Folder size={18} className="shrink-0 text-orange-500" />
+                  <h3 className="truncate text-sm font-bold text-slate-800">{folder}</h3>
                 </div>
-
-                <div className="mt-5 flex gap-2 border-t border-slate-100 pt-4">
-                  <a
-                    href={api.getGCodeDownloadUrl(file.id)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="secondary-button flex-1 text-xs"
-                    title="Download G-code"
-                  >
-                    <Download size={13} />
-                    Download
-                  </a>
-                  <button
-                    onClick={() => {
-                      setScheduleModalItem(file)
-                      setSchedulePriority(1)
-                    }}
-                    className="primary-button text-xs"
-                  >
-                    <Zap size={13} />
-                    Schedule
-                  </button>
-                </div>
+                <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500">
+                  {folderFileCount} file{folderFileCount === 1 ? '' : 's'}
+                </span>
               </div>
+
+              <div className="space-y-5">
+                {sortedSizeFolders.map(([size, sizeFiles]) => (
+                  <div key={size} className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Folder size={15} className="text-sky-500" />
+                        <h4 className="text-xs font-bold text-slate-700">{size}</h4>
+                      </div>
+                      <span className="text-[11px] font-medium text-slate-400">
+                        {sizeFiles.length} file{sizeFiles.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+                      {sizeFiles.map(renderFileCard)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
             )
           })}
         </div>
