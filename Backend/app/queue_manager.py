@@ -2,13 +2,41 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
+from time import monotonic
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import joinedload
 
+from .config import PRINTER_STATUS_CACHE_SECONDS
 from .gcode_storage import DatabaseUnavailable, StorageError
 from .models import GCodeFile, PrintQueueItem, Filament, db
 from .protocols import start_printer_print, upload_printer_file
 from .services import scan_network
 from .activity_logger import log_activity, track_printer_state
+
+
+_printer_snapshot = {"expires_at": 0.0, "printers": None}
+_printer_snapshot_lock = Lock()
+
+
+def _get_printer_snapshot(mock_printers=None):
+    """Return a short-lived cached result of live printer discovery.
+
+    Queue filtering and navigation should not repeatedly scan the entire local
+    network.  Mock data is deliberately never cached so tests remain isolated.
+    """
+    if mock_printers is not None:
+        return mock_printers
+
+    now = monotonic()
+    with _printer_snapshot_lock:
+        if _printer_snapshot["printers"] is not None and now < _printer_snapshot["expires_at"]:
+            return _printer_snapshot["printers"]
+
+        printers = scan_network()
+        _printer_snapshot["printers"] = printers
+        _printer_snapshot["expires_at"] = now + max(PRINTER_STATUS_CACHE_SECONDS, 0)
+        return printers
 
 
 def init_queue_table():
@@ -30,8 +58,21 @@ def get_printers_with_availability(mock_printers=None):
       - next_available_at: datetime (UTC)
     """
     now = datetime.now(timezone.utc)
-    raw_printers = mock_printers if mock_printers is not None else scan_network()
+    raw_printers = _get_printer_snapshot(mock_printers)
     printers = []
+
+    printer_ips = [printer.get("ip") for printer in raw_printers if printer.get("ip")]
+    active_items_by_ip = {ip: [] for ip in printer_ips}
+    if printer_ips:
+        try:
+            active_items = PrintQueueItem.query.filter(
+                PrintQueueItem.printer_ip.in_(printer_ips),
+                PrintQueueItem.status.in_(["printing", "assigned"]),
+            ).all()
+            for item in active_items:
+                active_items_by_ip.setdefault(item.printer_ip, []).append(item)
+        except SQLAlchemyError:
+            pass
 
     for p in raw_printers:
         ip = p.get("ip")
@@ -44,19 +85,11 @@ def get_printers_with_availability(mock_printers=None):
         # Check all active/assigned queue items in DB
         assigned_items = []
         printing_item = None
-        if ip:
-            try:
-                items = PrintQueueItem.query.filter(
-                    PrintQueueItem.printer_ip == ip,
-                    PrintQueueItem.status.in_(["printing", "assigned"]),
-                ).all()
-                for item in items:
-                    if item.status == "printing":
-                        printing_item = item
-                    else:
-                        assigned_items.append(item)
-            except Exception:
-                pass
+        for item in active_items_by_ip.get(ip, []):
+            if item.status == "printing":
+                printing_item = item
+            else:
+                assigned_items.append(item)
 
         is_idle = state in ["idle", "completed"] or progress >= 100.0
         is_available = is_idle and state != "error"
@@ -275,7 +308,9 @@ def get_print_queue(status=None, printer_ip=None):
         if printer_ip:
             query = query.filter_by(printer_ip=printer_ip)
 
-        query = query.order_by(
+        query = query.options(
+            joinedload(PrintQueueItem.gcode_file).joinedload(GCodeFile.analysis)
+        ).order_by(
             PrintQueueItem.priority.asc(),
             PrintQueueItem.created_at.asc(),
         )
@@ -292,26 +327,30 @@ def get_printers_queue_status(mock_printers=None):
     init_queue_table()
     printers = get_printers_with_availability(mock_printers)
 
+    printer_ips = [printer.get("ip") for printer in printers if printer.get("ip")]
+    queue_items_by_ip = {ip: [] for ip in printer_ips}
+    if printer_ips:
+        try:
+            records = (
+                PrintQueueItem.query.options(
+                    joinedload(PrintQueueItem.gcode_file).joinedload(GCodeFile.analysis)
+                )
+                .filter(
+                    PrintQueueItem.printer_ip.in_(printer_ips),
+                    PrintQueueItem.status.in_(["assigned", "printing", "queued"]),
+                )
+                .order_by(PrintQueueItem.priority.asc(), PrintQueueItem.created_at.asc())
+                .all()
+            )
+            for record in records:
+                queue_items_by_ip.setdefault(record.printer_ip, []).append(record.to_dict())
+        except SQLAlchemyError:
+            pass
+
     result = []
     for p in printers:
         ip = p.get("ip")
-        assigned_items = []
-        if ip:
-            try:
-                records = (
-                    PrintQueueItem.query.filter(
-                        PrintQueueItem.printer_ip == ip,
-                        PrintQueueItem.status.in_(["assigned", "printing", "queued"]),
-                    )
-                    .order_by(
-                        PrintQueueItem.priority.asc(),
-                        PrintQueueItem.created_at.asc(),
-                    )
-                    .all()
-                )
-                assigned_items = [r.to_dict() for r in records]
-            except SQLAlchemyError:
-                pass
+        assigned_items = queue_items_by_ip.get(ip, [])
 
         result.append({
             **p,

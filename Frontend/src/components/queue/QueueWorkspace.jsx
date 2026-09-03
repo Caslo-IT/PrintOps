@@ -45,22 +45,17 @@ export function QueueWorkspace({ onNotify }) {
   const [dispatchingId, setDispatchingId] = useState(null)
   const [confirmConfig, setConfirmConfig] = useState(null)
 
-  const loadData = async () => {
+  const loadQueueData = async () => {
     if (!hasCachedQueueData) setLoading(true)
     try {
-      const [queueData, printersData] = await Promise.all([
-        api.getPrintQueue(statusFilter, printerFilter),
-        api.getPrintersQueueStatus(),
-      ])
+      const queueData = await api.getPrintQueue(statusFilter, printerFilter)
       
       cachedQueue = queueData.queue || []
-      cachedPrintersQueueStatus = printersData.printers || []
       cachedStatusFilter = statusFilter
       cachedPrinterFilter = printerFilter
       hasCachedQueueData = true
       
       setQueue(cachedQueue)
-      setPrintersQueueStatus(cachedPrintersQueueStatus)
     } catch (err) {
       onNotify?.(`Failed to load queue data: ${err.message}`, 'error')
     } finally {
@@ -68,9 +63,28 @@ export function QueueWorkspace({ onNotify }) {
     }
   }
 
+  const loadPrinterStatus = async () => {
+    try {
+      const printersData = await api.getPrintersQueueStatus()
+      cachedPrintersQueueStatus = printersData.printers || []
+      setPrintersQueueStatus(cachedPrintersQueueStatus)
+    } catch (err) {
+      onNotify?.(`Failed to load printer availability: ${err.message}`, 'error')
+    }
+  }
+
+  const loadData = () => {
+    loadQueueData()
+    loadPrinterStatus()
+  }
+
   useEffect(() => {
-    loadData()
+    loadQueueData()
   }, [statusFilter, printerFilter])
+
+  useEffect(() => {
+    loadPrinterStatus()
+  }, [])
 
   // Fetch printer storage files when selected printer changes in modal
   useEffect(() => {
