@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Bell, Monitor, Save, User, Wifi, Users, Trash2, Plus } from 'lucide-react'
+import { Bell, FolderOpen, Monitor, Save, User, Wifi, Users, Trash2, Plus } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../../services/api'
 
@@ -9,6 +9,11 @@ export function SettingsWorkspace({ onNotify }) {
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [loadingUsers, setLoadingUsers] = useState(false)
+  const [storageLocation, setStorageLocation] = useState('')
+  const [storageFileCount, setStorageFileCount] = useState(0)
+  const [loadingStorage, setLoadingStorage] = useState(false)
+  const [savingStorage, setSavingStorage] = useState(false)
+  const [browsingStorage, setBrowsingStorage] = useState(false)
 
   const [activeTab, setActiveTab] = useState('general')
 
@@ -16,6 +21,9 @@ export function SettingsWorkspace({ onNotify }) {
   useEffect(() => {
     if (activeTab === 'users' && user?.role === 'admin') {
       fetchUsers()
+    }
+    if (activeTab === 'storage' && user?.role === 'admin') {
+      fetchStorageSettings()
     }
   }, [activeTab, user])
 
@@ -56,6 +64,45 @@ export function SettingsWorkspace({ onNotify }) {
     }
   }
 
+  const fetchStorageSettings = async () => {
+    setLoadingStorage(true)
+    try {
+      const data = await api.getGCodeStorageSettings()
+      setStorageLocation(data.location || '')
+      setStorageFileCount(data.file_count || 0)
+    } catch (err) {
+      onNotify?.('Failed to load G-code storage settings: ' + err.message, 'error')
+    } finally {
+      setLoadingStorage(false)
+    }
+  }
+
+  const handleSaveStorage = async () => {
+    setSavingStorage(true)
+    try {
+      const data = await api.updateGCodeStorageSettings(storageLocation)
+      setStorageLocation(data.location || storageLocation)
+      setStorageFileCount(data.file_count || 0)
+      onNotify?.(`G-code library location saved${data.migrated_files ? `; moved ${data.migrated_files} file(s)` : ''}`)
+    } catch (err) {
+      onNotify?.('Failed to update G-code storage location: ' + err.message, 'error')
+    } finally {
+      setSavingStorage(false)
+    }
+  }
+
+  const handleBrowseStorage = async () => {
+    setBrowsingStorage(true)
+    try {
+      const data = await api.browseGCodeStorageLocation()
+      if (data.location) setStorageLocation(data.location)
+    } catch (err) {
+      onNotify?.('Could not open the folder picker: ' + err.message, 'error')
+    } finally {
+      setBrowsingStorage(false)
+    }
+  }
+
   const handleSave = () => {
     if (onNotify) onNotify('Settings saved successfully', 'success')
   }
@@ -80,6 +127,9 @@ export function SettingsWorkspace({ onNotify }) {
             <TabButton icon={<User size={18} />} label="Account" active={activeTab === 'account'} onClick={() => setActiveTab('account')} />
             <TabButton icon={<Bell size={18} />} label="Notifications" active={activeTab === 'notifications'} onClick={() => setActiveTab('notifications')} />
             <TabButton icon={<Wifi size={18} />} label="Network" active={activeTab === 'network'} onClick={() => setActiveTab('network')} />
+            {user?.role === 'admin' && (
+              <TabButton icon={<FolderOpen size={18} />} label="G-Code Library" active={activeTab === 'storage'} onClick={() => setActiveTab('storage')} />
+            )}
             {user?.role === 'admin' && (
               <TabButton icon={<Users size={18} />} label="User Management" active={activeTab === 'users'} onClick={() => setActiveTab('users')} />
             )}
@@ -136,6 +186,43 @@ export function SettingsWorkspace({ onNotify }) {
                     <div className="h-6 w-11 rounded-full bg-orange-500 p-1 cursor-pointer">
                       <div className="h-4 w-4 rounded-full bg-white shadow-sm ml-auto"></div>
                     </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {activeTab === 'storage' && user?.role === 'admin' && (
+              <>
+                <h3 className="text-xl font-bold tracking-tight">Local G-Code Library</h3>
+                <div className="flex flex-col gap-5 border-t border-slate-100 pt-5">
+                  <div>
+                    <label htmlFor="gcodeStorageLocation" className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                      Storage location on this server
+                    </label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        id="gcodeStorageLocation"
+                        type="text"
+                        value={storageLocation}
+                        onChange={(e) => setStorageLocation(e.target.value)}
+                        placeholder="/absolute/path/to/gcode-library"
+                        disabled={loadingStorage || savingStorage || browsingStorage}
+                        className="w-full flex-1 rounded-lg border border-slate-200 px-4 py-2.5 font-mono text-sm outline-none transition-all focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 disabled:bg-slate-50"
+                      />
+                      <button type="button" className="secondary-button" onClick={handleBrowseStorage} disabled={loadingStorage || savingStorage || browsingStorage}>
+                        <FolderOpen size={16} />
+                        {browsingStorage ? 'Opening…' : 'Browse folders'}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      The picker opens on the machine running PrintOps. You can also enter an absolute server path. Saving moves the {storageFileCount} managed library file{storageFileCount === 1 ? '' : 's'} and future uploads use this folder.
+                    </p>
+                  </div>
+                  <div>
+                    <button type="button" className="primary-button" onClick={handleSaveStorage} disabled={loadingStorage || savingStorage || !storageLocation.trim()}>
+                      <Save size={16} />
+                      {savingStorage ? 'Moving library…' : 'Save storage location'}
+                    </button>
                   </div>
                 </div>
               </>
@@ -201,13 +288,15 @@ export function SettingsWorkspace({ onNotify }) {
             
             {/* Actions */}
 
-            <div className="mt-4 flex items-center justify-end gap-3 border-t border-slate-100 pt-6">
-              <button className="secondary-button" onClick={() => onNotify?.('Changes discarded', 'error')}>Cancel</button>
-              <button className="primary-button" onClick={handleSave}>
-                <Save size={16} />
-                Save Changes
-              </button>
-            </div>
+            {activeTab !== 'storage' && (
+              <div className="mt-4 flex items-center justify-end gap-3 border-t border-slate-100 pt-6">
+                <button className="secondary-button" onClick={() => onNotify?.('Changes discarded', 'error')}>Cancel</button>
+                <button className="primary-button" onClick={handleSave}>
+                  <Save size={16} />
+                  Save Changes
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

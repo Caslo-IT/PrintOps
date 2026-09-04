@@ -60,6 +60,7 @@ export function FilamentsWorkspace({ onNotify }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const liveIntervalRef = useRef(null)
+  const liveRequestInFlightRef = useRef(false)
 
   const [formData, setFormData] = useState({
     name: '',
@@ -70,24 +71,10 @@ export function FilamentsWorkspace({ onNotify }) {
     assigned_printer_name: '',
   })
 
-  // ── Initial full load (filaments + printers scan) ──────────────────────────
-  const loadData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [filamentsData, printersData] = await Promise.all([
-        api.getLiveFilaments().catch(() => api.getFilaments().catch(() => ({ filaments: [] }))),
-        api.scanPrinters().catch(() => ({ printers: [] })),
-      ])
-      setFilaments(filamentsData?.filaments || [])
-      setPrinters(printersData?.printers || [])
-    } catch {
-      onNotify('Failed to load filaments data', 'error')
-    }
-    setLoading(false)
-  }, [onNotify])
-
   // ── Background live poll — only updates the filament list, no spinner ──────
   const pollLive = useCallback(async () => {
+    if (liveRequestInFlightRef.current) return
+    liveRequestInFlightRef.current = true
     try {
       const data = await api.getLiveFilaments()
       if (data?.filaments) {
@@ -112,8 +99,32 @@ export function FilamentsWorkspace({ onNotify }) {
       }
     } catch {
       // Silently ignore — the static data stays visible
+    } finally {
+      liveRequestInFlightRef.current = false
     }
   }, [])
+
+  // ── Initial load ──────────────────────────────────────────────────────────
+  // Render stored inventory immediately. Live printer discovery is deliberately
+  // allowed to finish in the background because it may require a subnet scan.
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const filamentsData = await api.getFilaments()
+      setFilaments(filamentsData?.filaments || [])
+    } catch {
+      onNotify('Failed to load filaments data', 'error')
+    } finally {
+      setLoading(false)
+    }
+
+    // These requests share the backend snapshot, so they produce at most one
+    // network scan while preserving live card details and dropdown choices.
+    void pollLive()
+    void api.scanPrinters()
+      .then(data => setPrinters(data?.printers || []))
+      .catch(() => setPrinters([]))
+  }, [onNotify, pollLive])
 
   useEffect(() => {
     loadData()

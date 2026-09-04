@@ -12,12 +12,15 @@ from flask_migrate import Migrate
 from .config import DATABASE_URL
 from .gcode_storage import (
     StorageError,
+    choose_gcode_storage_location,
     create_gcode_folder,
     delete_gcode_file,
     get_gcode_file,
+    get_gcode_storage_settings,
     list_gcode_files,
     list_gcode_folders,
     save_gcode_file,
+    update_gcode_storage_location,
 )
 from .models import db, User
 from .auth import token_required, admin_required, check_password, generate_token, hash_password
@@ -32,7 +35,7 @@ from .queue_manager import (
 )
 from .activity_logger import log_activity, track_printer_state, get_filament_baseline, set_filament_baseline
 from .models import ActivityLog, GCodeFile, PrintHistory, Filament, PrintQueueItem
-from .services import get_printer_files, get_printer_status, scan_network
+from .services import get_printer_files, get_printer_snapshot, get_printer_status
 
 
 app = Flask(__name__)
@@ -263,7 +266,7 @@ def find_printers():
               type: string
               nullable: true
     """
-    printers = scan_network()
+    printers = get_printer_snapshot()
     for p in printers:
         if p.get("ip") and p.get("state"):
             track_printer_state(p["ip"], p["state"], p.get("name"))
@@ -632,6 +635,38 @@ def _active_gcode_for_printer(printer_ip, job_filename):
         if queue_item and queue_item.gcode_file:
             return queue_item.gcode_file
     return None
+
+
+@app.get("/settings/gcode-storage")
+@token_required
+def get_gcode_storage_settings_route():
+    """Return the server folder used for the Local G-code Library."""
+    try:
+        return jsonify(get_gcode_storage_settings())
+    except StorageError as error:
+        return _storage_error_response(error)
+
+
+@app.put("/settings/gcode-storage")
+@admin_required
+def update_gcode_storage_settings_route():
+    """Move the Local G-code Library to an absolute server-side folder."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(update_gcode_storage_location(payload.get("location")))
+    except StorageError as error:
+        return _storage_error_response(error)
+
+
+@app.post("/settings/gcode-storage/browse")
+@admin_required
+def choose_gcode_storage_settings_route():
+    """Open the host machine's native folder selection dialog."""
+    try:
+        location = choose_gcode_storage_location()
+    except StorageError as error:
+        return _storage_error_response(error)
+    return jsonify({"location": location})
 
 
 @app.post("/gcode/folders")
@@ -1331,7 +1366,7 @@ def get_live_filaments_route():
     printer_status_by_id: dict = {}
     if assigned_ids:
         try:
-            live_printers = scan_network()
+            live_printers = get_printer_snapshot()
             for p in live_printers:
                 p_ip = p.get("ip")
                 p_name = p.get("name")

@@ -108,6 +108,14 @@ export const api = {
       method: 'DELETE',
     }),
   getGCodeDownloadUrl: (id) => `${API_BASE}/gcode/files/${id}`,
+  getGCodeStorageSettings: () => request('/settings/gcode-storage'),
+  updateGCodeStorageSettings: (location) =>
+    request('/settings/gcode-storage', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location }),
+    }),
+  browseGCodeStorageLocation: () => request('/settings/gcode-storage/browse', { method: 'POST' }),
 
   // Print Queue
   getPrintQueue: (status, printerIp) => {
