@@ -2,21 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Lock
-from time import monotonic
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
-from .config import PRINTER_STATUS_CACHE_SECONDS
 from .gcode_storage import DatabaseUnavailable, StorageError
 from .models import GCodeFile, PrintQueueItem, Filament, db
 from .protocols import start_printer_print, upload_printer_file
-from .services import scan_network
+from .services import get_printer_snapshot
 from .activity_logger import log_activity, track_printer_state
-
-
-_printer_snapshot = {"expires_at": 0.0, "printers": None}
-_printer_snapshot_lock = Lock()
 
 
 def _get_printer_snapshot(mock_printers=None):
@@ -28,15 +21,7 @@ def _get_printer_snapshot(mock_printers=None):
     if mock_printers is not None:
         return mock_printers
 
-    now = monotonic()
-    with _printer_snapshot_lock:
-        if _printer_snapshot["printers"] is not None and now < _printer_snapshot["expires_at"]:
-            return _printer_snapshot["printers"]
-
-        printers = scan_network()
-        _printer_snapshot["printers"] = printers
-        _printer_snapshot["expires_at"] = now + max(PRINTER_STATUS_CACHE_SECONDS, 0)
-        return printers
+    return get_printer_snapshot()
 
 
 def init_queue_table():

@@ -31,6 +31,15 @@ class User(db.Model):
         }
 
 
+class AppSetting(db.Model):
+    """Persistent application settings stored independently of environment defaults."""
+
+    __tablename__ = "app_settings"
+
+    key = db.Column(db.String(100), primary_key=True)
+    value = db.Column(db.Text, nullable=False)
+
+
 class GCodeFile(db.Model):
     """ORM model representing stored G-code files."""
 

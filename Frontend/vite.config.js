@@ -16,6 +16,7 @@ export default defineConfig({
       '/users': 'http://127.0.0.1:5000',
       '/history': 'http://127.0.0.1:5000',
       '/filaments': 'http://127.0.0.1:5000',
+      '/settings': 'http://127.0.0.1:5000',
     },
   },
   test: {

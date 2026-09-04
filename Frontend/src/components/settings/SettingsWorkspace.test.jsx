@@ -14,7 +14,10 @@ vi.mock('../../services/api', () => ({
   api: {
     getUsers: vi.fn(),
     createUser: vi.fn(),
-    deleteUser: vi.fn()
+    deleteUser: vi.fn(),
+    getGCodeStorageSettings: vi.fn(),
+    updateGCodeStorageSettings: vi.fn(),
+    browseGCodeStorageLocation: vi.fn(),
   }
 }))
 
@@ -27,6 +30,8 @@ describe('SettingsWorkspace', () => {
       user: { username: 'admin', role: 'admin' }
     })
     api.getUsers.mockResolvedValue({ users: [] })
+    api.getGCodeStorageSettings.mockResolvedValue({ location: '/srv/printops/gcode', file_count: 0 })
+    api.browseGCodeStorageLocation.mockResolvedValue({ location: null })
   })
 
   it('renders General settings by default', () => {
@@ -49,6 +54,15 @@ describe('SettingsWorkspace', () => {
     render(<SettingsWorkspace onNotify={mockOnNotify} />)
     
     expect(screen.getByText('User Management')).toBeInTheDocument()
+  })
+
+  it('loads the G-Code Library location for an admin', async () => {
+    render(<SettingsWorkspace onNotify={mockOnNotify} />)
+
+    fireEvent.click(screen.getByText('G-Code Library'))
+
+    expect(await screen.findByDisplayValue('/srv/printops/gcode')).toBeInTheDocument()
+    expect(screen.getByText(/Saving moves the 0 managed library files/)).toBeInTheDocument()
   })
 
   it('hides User Management tab for non-admin users', () => {
