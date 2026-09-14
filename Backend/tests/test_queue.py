@@ -1,13 +1,13 @@
 """Unit tests for Backend print queue management system."""
 
-import os
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
-# Set test environment database to SQLite in-memory before importing app
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-
-from app.api import app, db
+# Other test modules may already have loaded app.config. Override its resolved
+# value before importing the API, where SQLAlchemy creates the database engine.
+with patch("app.config.DATABASE_URL", "sqlite:///:memory:"):
+    from app.api import app, db
 from app.models import GCodeAnalysis, GCodeFile, PrintQueueItem, User, Filament
 from app.auth import generate_token
 from app.queue_manager import (
@@ -25,9 +25,11 @@ class TestPrintQueueManager(unittest.TestCase):
 
     def setUp(self):
         app.config["TESTING"] = True
-        app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
         self.app_context = app.app_context()
         self.app_context.push()
+        self.addCleanup(self.app_context.pop)
+        # Fail before creating or dropping tables if test isolation regresses.
+        self.assertEqual(db.engine.url.render_as_string(), "sqlite:///:memory:")
         db.create_all()
 
         # Create a test admin user and token
@@ -105,7 +107,6 @@ class TestPrintQueueManager(unittest.TestCase):
     def tearDown(self):
         db.session.remove()
         db.drop_all()
-        self.app_context.pop()
 
     def test_printer_availability_calculation(self):
         printers = get_printers_with_availability(mock_printers=self.mock_printers)
