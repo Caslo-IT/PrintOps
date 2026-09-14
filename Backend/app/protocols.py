@@ -99,6 +99,17 @@ async def get_creality_status(ip):
         )
         feed_state = field(status_message, "feedState", default=None)
 
+        # Some stock firmware retains the running/idle state and job fields
+        # after reaching 100%. Resolve completion before the active-job fallback
+        # so the monitor emits a completion transition (and its sound alert).
+        if (
+            job_filename
+            and float(print_progress or 0) >= 100
+            and state_name in {"idle", "preparing", "printing", "unknown"}
+        ):
+            state_name = "completed"
+            state_detail = "The last print completed."
+
         # K1 Max firmware reports state=1 while an active job is running. Its
         # feedState/layer/job fields distinguish this from preheating, and are
         # the reliable signal for live filament tracking.

@@ -19,6 +19,7 @@ import { API_BASE, normalizePrinter } from './data/printers'
 import { api } from './services/api'
 import { AuthProvider, useAuth } from './components/auth/AuthContext'
 import { Login } from './components/auth/Login'
+import { createActivityTracker, printerSoundType, playPrinterSound, unlockPrinterSounds } from './services/printerSounds'
 import './styles.css'
 
 function App() {
@@ -34,7 +35,6 @@ function App() {
   const [activeView, setActiveView] = useState('overview')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [desktopNavOpen, setDesktopNavOpen] = useState(true)
-  const [lastLogId, setLastLogId] = useState(null)
 
   const [queueCount, setQueueCount] = useState(0)
   const [storageCount, setStorageCount] = useState(0)
@@ -84,48 +84,57 @@ function App() {
     }
   }, [])
 
-  const checkActivity = useCallback(async () => {
-    try {
-      const logs = await api.getActivityLogs(5)
-      if (!logs || logs.length === 0) return
-
-      setLastLogId((prevId) => {
-        if (prevId === null) {
-          return logs[0].id // Initial load, don't notify for past events
+  useEffect(() => {
+    if (!isAuthenticated) return
+    let cancelled = false
+    let loading = false
+    const track = createActivityTracker()
+    const checkActivity = async () => {
+      if (loading) return
+      loading = true
+      try {
+        const logs = await api.getActivityLogs(100)
+        if (cancelled) return
+        const fresh = track(logs)
+        if (!fresh.length) return
+        const newest = fresh[0]
+        const printer = newest.printer_name || newest.printer_ip
+        notify(`${printer ? `[${printer}] ` : ''}${newest.message}`, newest.event_type)
+        // Errors take precedence when several events arrive together.
+        const types = new Set(fresh.map(printerSoundType).filter(Boolean))
+        for (const type of ['error', 'complete', 'start']) {
+          if (types.has(type)) playPrinterSound(type)
         }
-
-        const newLogs = logs.filter(log => log.id > prevId)
-        if (newLogs.length > 0) {
-          // Notify for the most recent event if there are multiple
-          const newest = newLogs[0]
-          // Prefix with printer name or IP if available for context
-          const printerIdentifier = newest.printer_name || newest.printer_ip
-          const prefix = printerIdentifier ? `[${printerIdentifier}] ` : ''
-          notify(`${prefix}${newest.message}`, newest.event_type)
-          return newest.id
-        }
-        return prevId
-      })
-    } catch {
-      // ignore
+      } catch {
+        // Retry next poll without losing the last successfully observed event.
+      } finally { loading = false }
     }
-  }, [notify])
+    const unlock = () => { void unlockPrinterSounds() }
+    window.addEventListener('click', unlock)
+    window.addEventListener('keydown', unlock)
+    checkActivity()
+    const interval = setInterval(checkActivity, 10000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      window.removeEventListener('click', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [isAuthenticated, notify])
 
   useEffect(() => {
     if (!isAuthenticated) return
 
     scan()
     loadCounts()
-    checkActivity()
 
     const intervalId = setInterval(() => {
       scan(true)
       loadCounts()
-      checkActivity()
     }, 10000)
 
     return () => clearInterval(intervalId)
-  }, [scan, loadCounts, checkActivity, isAuthenticated])
+  }, [scan, loadCounts, isAuthenticated])
 
   useEffect(() => {
     const closeOnEscape = (event) => event.key === 'Escape' && setMobileNavOpen(false)
