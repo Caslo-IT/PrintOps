@@ -2,23 +2,18 @@
 
 import asyncio
 import concurrent.futures
-from threading import Lock
+import logging
+from copy import deepcopy
+from threading import Event, Lock, Thread
 from time import monotonic
 
-from .config import PRINTER_STATUS_CACHE_SECONDS
+from .config import PRINTER_POLL_INTERVAL_SECONDS
 from .network import get_scan_addresses
 from .protocols import (
     get_creality_status,
     get_moonraker_status,
     get_printer_files,
 )
-
-
-# Discovery probes every address on the local subnet when PRINTER_IPS is not
-# configured. Keep one shared snapshot so concurrent views do not each start
-# their own expensive scan.
-_printer_snapshot = {"expires_at": 0.0, "printers": None}
-_printer_snapshot_lock = Lock()
 
 
 def get_printer_status(ip):
@@ -34,21 +29,60 @@ def scan_network():
         return [item for item in results if item]
 
 
+class PrinterMonitor:
+    """One non-overlapping polling worker with a snapshot safe for request threads."""
+
+    def __init__(self, interval=PRINTER_POLL_INTERVAL_SECONDS):
+        self.interval = max(interval, 0.1)
+        self._lock = Lock()
+        self._stop = Event()
+        self._thread = None
+        self._printers = []
+
+    def start(self, on_update=None):
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = Thread(
+                target=self._run, args=(on_update,),
+                name="printer-monitor", daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self, timeout=None):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def snapshot(self):
+        with self._lock:
+            return deepcopy(self._printers)
+
+    def _run(self, on_update):
+        while not self._stop.is_set():
+            started = monotonic()
+            try:
+                printers = scan_network()
+                with self._lock:
+                    self._printers = deepcopy(printers)
+                if on_update is not None:
+                    on_update(printers)
+            except Exception:
+                logging.getLogger(__name__).exception("Background printer check failed")
+            # Slow scans never overlap. Short scans run on a ten-second cadence.
+            if self._stop.wait(max(0.1, self.interval - (monotonic() - started))):
+                break
+
+
+_printer_monitor = PrinterMonitor()
+
+
+def start_printer_monitor(on_update=None):
+    """Start once per serving process; subsequent calls are harmless."""
+    _printer_monitor.start(on_update)
+
+
 def get_printer_snapshot():
-    """Return a short-lived shared result of printer discovery.
-
-    Holding the lock while a scan runs deliberately coalesces simultaneous
-    requests: callers arriving during a scan receive that same new snapshot
-    instead of starting a second subnet-wide probe.
-    """
-    now = monotonic()
-    with _printer_snapshot_lock:
-        if _printer_snapshot["printers"] is not None and now < _printer_snapshot["expires_at"]:
-            return _printer_snapshot["printers"]
-
-        printers = scan_network()
-        _printer_snapshot["printers"] = printers
-        # Measure the TTL after discovery completes. A slow scan must not make
-        # a freshly gathered snapshot immediately expire.
-        _printer_snapshot["expires_at"] = monotonic() + max(PRINTER_STATUS_CACHE_SECONDS, 0)
-        return printers
+    """Return the latest completed scan without blocking on network access."""
+    return _printer_monitor.snapshot()

@@ -1,5 +1,16 @@
 # PrintOps
 
+Printer sound alerts are available in **Settings → Notifications**. Printing
+started, printing complete, and printer errors each have a distinct beep pattern.
+Sounds are enabled by default; mute individual alerts, adjust volume, or use
+**Test sound**. Preferences save automatically in the current browser.
+
+Audio plays on the computer viewing PrintOps using Web Audio, including browsers
+on Windows and macOS. Keep the page open and click or press a key after opening
+it to allow audio playback. The tab and system volume must be unmuted. Alerts
+follow the 10-second activity polling cycle; old events on initial load are silent.
+Sleeping computers and suspended browser tabs cannot provide timely alerts.
+
 ## Run
 
 ```bash
@@ -80,4 +91,3 @@ Backend/
     ├── protocols.py  # Creality WebSocket and Moonraker clients
     └── services.py   # Printer scanning and status fallback logic
 ```
-
