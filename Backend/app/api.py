@@ -35,7 +35,7 @@ from .queue_manager import (
 )
 from .activity_logger import log_activity, track_printer_state, get_filament_baseline, set_filament_baseline
 from .models import ActivityLog, GCodeFile, PrintHistory, Filament, PrintQueueItem
-from .services import get_printer_files, get_printer_snapshot, get_printer_status
+from .services import get_printer_files, get_printer_snapshot, get_printer_status, start_printer_monitor
 
 
 app = Flask(__name__)
@@ -44,6 +44,24 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
 migrate = Migrate(app, db)
+
+
+def _record_printer_snapshot(printers):
+    with app.app_context():
+        for printer in printers:
+            track_printer_state(
+                printer.get("ip"), printer.get("state"), printer.get("name"),
+                printer.get("progress", 0), printer.get("job_filename"),
+            )
+
+
+@app.before_request
+def _ensure_printer_monitor():
+    # Start in the serving process, avoiding CLI migrations and reloader parents.
+    # Once started, polling continues even when no clients are connected.
+    if not app.testing:
+        start_printer_monitor(_record_printer_snapshot)
+
 
 
 
@@ -267,10 +285,6 @@ def find_printers():
               nullable: true
     """
     printers = get_printer_snapshot()
-    for p in printers:
-        if p.get("ip") and p.get("state"):
-            track_printer_state(p["ip"], p["state"], p.get("name"))
-            
     return jsonify({
         "count": len(printers),
         "printers": printers,

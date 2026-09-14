@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Bell, FolderOpen, Monitor, Save, User, Wifi, Users, Trash2, Plus } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../../services/api'
+import { SoundSettings } from './SoundSettings'
 
 export function SettingsWorkspace({ onNotify }) {
   const { user } = useAuth()
@@ -164,10 +165,7 @@ export function SettingsWorkspace({ onNotify }) {
               <>
                 <h3 className="text-xl font-bold tracking-tight">Notification Preferences</h3>
                 <div className="flex flex-col gap-4 border-t border-slate-100 pt-5">
-                  <ToggleSetting label="Print job completion alerts" defaultChecked />
-                  <ToggleSetting label="Error and pause alerts" defaultChecked />
-                  <ToggleSetting label="Weekly summary emails" defaultChecked={false} />
-                  <ToggleSetting label="Network disconnection alerts" defaultChecked />
+                  <SoundSettings />
                 </div>
               </>
             )}
@@ -288,7 +286,7 @@ export function SettingsWorkspace({ onNotify }) {
             
             {/* Actions */}
 
-            {activeTab !== 'storage' && (
+            {activeTab !== 'storage' && activeTab !== 'notifications' && (
               <div className="mt-4 flex items-center justify-end gap-3 border-t border-slate-100 pt-6">
                 <button className="secondary-button" onClick={() => onNotify?.('Changes discarded', 'error')}>Cancel</button>
                 <button className="primary-button" onClick={handleSave}>

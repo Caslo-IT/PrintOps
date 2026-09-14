@@ -1,6 +1,8 @@
 """Activity logger service for recording printer and job events."""
 
 from datetime import datetime, timezone
+from functools import wraps
+from threading import RLock
 from .models import db, ActivityLog, PrintHistory
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -52,6 +54,18 @@ def clear_filament_baseline(ip: str):
     _printer_filament_baseline.pop(ip, None)
 
 
+_state_lock = RLock()
+
+
+def _synchronize_state(func):
+    @wraps(func)
+    def synchronized(*args, **kwargs):
+        with _state_lock:
+            return func(*args, **kwargs)
+    return synchronized
+
+
+@_synchronize_state
 def track_printer_state(ip, state_name, printer_name=None, progress=0.0, job_filename=None):
     """Track printer state, log activity, and manage PrintHistory on state changes."""
     if not ip or not state_name:

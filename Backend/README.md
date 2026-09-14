@@ -38,6 +38,7 @@ Create or update the `.env` file inside the `Backend` directory:
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/printops
 MOONRAKER_PORT=7125
 CREALITY_PORT=9999
+PRINTER_POLL_INTERVAL_SECONDS=10
 ```
 
 > **Note**: Replace `postgres:postgres@localhost:5432/printops` with your local PostgreSQL database credentials and host details.
@@ -88,6 +89,8 @@ Or run via the main entry point:
 ```bash
 python main.py
 ```
+
+Printer monitoring starts on the first HTTP request and continues in a daemon thread every 10 seconds, even with no browser connected. API requests read the latest completed snapshot without waiting for discovery; the initial snapshot is empty until the first scan finishes. Slow scans never overlap, and failures are logged and retried. State changes are recorded in the background. Set `PRINTER_POLL_INTERVAL_SECONDS` to change the interval. Each server process has its own monitor, so use one worker to avoid duplicate network scans and activity tracking.
 
 - **API Base URL**: `http://127.0.0.1:5000/`
 - **Swagger Documentation**: Interactive API docs are available at `http://127.0.0.1:5000/apidocs/`
